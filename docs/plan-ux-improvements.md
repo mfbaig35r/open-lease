@@ -66,35 +66,49 @@ an honest elapsed/budget ETA, never a bare `starting_server` for minutes. Unit t
 deploy. This is the single biggest felt-slowness. The `VolumeSpec` seam exists but
 `RunPodProvider.create_instance` raises `NotSupportedError` on any volume today.
 
-**Approach: a per-namespace RunPod network volume mounted at the HF cache dir.**
+### Investigation findings (RunPod network volumes, 2026-07-04)
 
-- On first deploy in a namespace, ensure a RunPod **network volume** exists (create if absent,
-  region-pinned). Mount it at the HuggingFace cache path and set `HF_HOME` /
-  `HUGGINGFACE_HUB_CACHE` env so vLLM downloads into and reads from it. Second deploy of the same
-  model finds cached weights and skips the download.
-- The `VolumeSpec` model already carries `size_gb`, `mount_path`, `persistent`. Extend the provider
-  create body to attach a network volume by id.
+From the live REST OpenAPI spec and RunPod docs:
 
-**Key design decisions to resolve before building.**
-- **Shared vs per-model volume.** A single shared cache volume per namespace is the most
-  space-efficient, but RunPod network volumes are typically attachable to one pod at a time and are
-  region-locked. That directly conflicts with the concurrent-deploy case just validated in gauntlet
-  #5 (two pods at once). Options: (a) per-model volumes (concurrent-safe, more volumes to manage);
-  (b) shared volume but serialize deploys that need it; (c) shared read-only mount if RunPod
-  supports multi-attach read-only. Verify RunPod's actual multi-attach semantics first; this is the
-  crux and determines the whole design.
-- **Region pinning.** A volume is bound to a region, so the pod must launch in that region. This
-  removes RunPod's automatic capacity spread and can cause "no capacity in region" failures. Need a
-  region preference in config and a clear error when the pinned region is dry.
-- **Lifecycle + cost.** Volumes persist beyond pods and cost storage per month. Needs `gpu volumes`
-  (list/create/delete) and storage cost in the cost model (today cost is GPU-hours only, §11).
+- **API surface.** `POST /v1/networkvolumes` create takes `{name, size (GB), dataCenterId}`; also
+  `GET`/`PATCH`/`DELETE /v1/networkvolumes/{id}`. Pod create (`PodCreateInput`) takes a single
+  `networkVolumeId` plus `volumeMountPath` (mount location). One volume per pod.
+- **Multi-attach: YES.** "Multiple pods can now mount the same network volume simultaneously."
+  So a shared per-namespace cache volume works even for concurrent deploys (the gauntlet #5 case).
+  This is the crux and it is resolved in favor of a shared volume.
+- **Concurrent-write corruption is the real risk, not attach.** "Writing to the same volume from
+  multiple workers simultaneously may cause data corruption. Handle concurrent write access in your
+  application logic." So two concurrent *cold* deploys of the *same* model, both writing weights to
+  the same cache path, can corrupt. Cache *hits* (read-only) are safe to share concurrently.
+- **Region locking: confirmed.** A volume is `dataCenterId`-scoped, and attaching it "constrains
+  worker deployments to that volume's datacenter, which may limit GPU availability and reduce
+  failover options." Attaching removes RunPod's automatic capacity spread.
+- **Pricing.** $0.07/GB/month (first 1 TB), $0.05/GB beyond. NVMe, 200-400 MB/s (up to 10 GB/s).
+
+### Resulting design (de-risked)
+
+- **Shared per-namespace network volume** at a fixed `dataCenterId`, mounted at the HF cache dir,
+  with `HF_HOME` / `HUGGINGFACE_HUB_CACHE` pointed at it. Multi-attach makes this safe for
+  concurrency; per-model volumes are not needed.
+- **Mitigate the concurrent-cold-download race** (the one real hazard): a per-model download lock so
+  only the first deploy of an uncached model populates the cache while others wait for it, after
+  which all reads are cache hits (safe to share). A pragmatic v1 is a small lock row in the store
+  keyed by model_id, checked in the deploy path; HF's own `.incomplete` + lock files are a backstop
+  but are not reliable across NFS hosts, so do not depend on them alone. Simplest possible v1:
+  document the risk, rely on HF locking, and only build the store lock if corruption is observed.
+- **Region pinning is a real tradeoff, made explicit.** A new `runpod_data_center_id` config pins
+  both the volume and cache-enabled pods to one datacenter. Surface a clear "no capacity for <gpu>
+  in <dc>" error, and keep caching opt-in (`cache_volume_enabled=false` default) so non-cache
+  deploys keep RunPod's full capacity spread.
+- **Cost.** Add storage accrual at the $0.07/GB rate (separate from GPU-hours) and a `gpu volumes`
+  command to list/size/delete.
 
 **Code touch-points.**
 - `providers/runpod.py`: volume create/attach in `create_instance`; a `find_or_create_volume`
   helper; region handling.
 - `providers/base.py`: promote volume support from optional to a first-class provider capability
   (already flagged via `ProviderCapabilities.supports_volumes`).
-- `config.py`: `cache_volume_enabled`, `cache_volume_size_gb`, `region`.
+- `config.py`: `cache_volume_enabled` (default false), `cache_volume_size_gb`, `runpod_data_center_id`.
 - `core/catalog.py` / profiles: optional per-model cache hint (size).
 - `core/costs.py`: storage-cost accrual (new, separate from GPU-hours).
 - `cli/main.py` + `render.py`: `gpu volumes`.
