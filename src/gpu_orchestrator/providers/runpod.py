@@ -89,6 +89,9 @@ class RunPodProvider(Provider):
             "cloudType": "SECURE",
             "containerDiskInGb": request.disk_gb,
             "env": request.env or None,
+            # dockerEntrypoint overrides the image ENTRYPOINT so the pod runs our command on start
+            # (runpod-ephemeral). Empty list => use the image default.
+            "dockerEntrypoint": request.command or None,
         }
         if request.ports:
             body["ports"] = ",".join(f"{p}/http" for p in request.ports)

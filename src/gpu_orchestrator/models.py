@@ -190,6 +190,9 @@ class InstanceRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     disk_gb: int
     ports: list[int] = Field(default_factory=list)
+    # Container command/args (e.g. the vLLM server invocation). The provider maps this to its
+    # container-entrypoint mechanism (RunPod: dockerEntrypoint). Empty = use the image default.
+    command: list[str] = Field(default_factory=list)
     cloud_type: CloudType = CloudType.ON_DEMAND
     volume: VolumeSpec | None = None
 

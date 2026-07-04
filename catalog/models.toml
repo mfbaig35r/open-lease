@@ -1,0 +1,85 @@
+# Curated model catalog (data, not code). Adding a model = adding a [models.<key>] block.
+# Every profile must carry [models.<key>.profile.validation] or it will not load (spec §14).
+# The TOML table key avoids dots; the canonical model id is the `id` field.
+
+[models.qwen3-0-6b]
+id = "qwen3-0.6b"
+hf_repo = "Qwen/Qwen3-0.6B"
+family = "qwen3"
+parameter_count = "0.6B"
+min_gpu_memory_gb = 8
+context_window = 32768
+license = "apache-2.0"
+chat = true
+supports_tools = true
+
+[models.qwen3-0-6b.profile]
+image = "vllm/vllm-openai:v0.9.1"
+tensor_parallel = 1
+gpu_memory_utilization = 0.90
+recommended_gpu = "RTX-A4000"
+min_disk_gb = 20
+
+[models.qwen3-0-6b.profile.validation]
+validated_at = "2026-07-03"
+validated_provider = "runpod"
+validated_gpu = "RTX-A4000"
+validated_image = "vllm/vllm-openai:v0.9.1"
+startup_timeout_seconds = 600
+notes = "Smallest catalog model; the integration-gauntlet target."
+
+[models.llama-3-1-8b-instruct]
+id = "llama-3.1-8b-instruct"
+hf_repo = "meta-llama/Llama-3.1-8B-Instruct"
+family = "llama3"
+parameter_count = "8B"
+min_gpu_memory_gb = 24
+context_window = 131072
+license = "llama-3.1-community"
+chat = true
+supports_tools = true
+
+[models.llama-3-1-8b-instruct.profile]
+image = "vllm/vllm-openai:v0.9.1"
+tensor_parallel = 1
+gpu_memory_utilization = 0.90
+recommended_gpu = "A100-80GB"
+min_disk_gb = 60
+
+[models.llama-3-1-8b-instruct.profile.launch_args]
+"--max-model-len" = "32768"
+
+[models.llama-3-1-8b-instruct.profile.validation]
+validated_at = "2026-07-03"
+validated_provider = "runpod"
+validated_gpu = "A100-80GB"
+validated_image = "vllm/vllm-openai:v0.9.1"
+startup_timeout_seconds = 1200
+notes = "Context capped to 32k via launch_args to fit KV cache on a single A100."
+
+[models.qwen3-32b]
+id = "qwen3-32b"
+hf_repo = "Qwen/Qwen3-32B"
+family = "qwen3"
+parameter_count = "32B"
+min_gpu_memory_gb = 80
+context_window = 32768
+license = "apache-2.0"
+chat = true
+supports_tools = true
+supports_reasoning = true
+
+[models.qwen3-32b.profile]
+image = "vllm/vllm-openai:v0.9.1"
+tensor_parallel = 1
+gpu_memory_utilization = 0.90
+recommended_gpu = "A100-80GB"
+min_disk_gb = 120
+
+[models.qwen3-32b.profile.validation]
+validated_at = "2026-07-03"
+validated_provider = "runpod"
+validated_gpu = "A100-80GB"
+validated_image = "vllm/vllm-openai:v0.9.1"
+startup_timeout_seconds = 2400
+notes = "First launch downloads ~65GB; expect a slow cold start."
