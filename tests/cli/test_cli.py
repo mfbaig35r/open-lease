@@ -118,8 +118,11 @@ def test_unknown_model_exits_1(cli):
     assert "Error" in result.output
 
 
-def test_proxy_is_deferred(cli):
-    runner, _ = cli
-    result = runner.invoke(app, ["proxy"])
+def test_chat_rejects_non_ready_deployment(cli):
+    runner, orch = cli
+    # A deployment that was never driven to READY: chat should refuse, not hang on a dead endpoint.
+    runner.invoke(app, ["deploy", "qwen3-0.6b", "--provider", "mock"])  # non-blocking -> REQUESTED
+    dep_id = orch.list_deployments()[0].id
+    result = runner.invoke(app, ["chat", dep_id])
     assert result.exit_code == 1
-    assert "step 8" in result.output
+    assert "not READY" in result.output

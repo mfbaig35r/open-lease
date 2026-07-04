@@ -115,11 +115,18 @@ and teardown. Two real-API bugs found and fixed in commit `a51a94d`:
 Not yet run: the full gauntlet checklist (spec §18) beyond the smoke path, larger models, and
 Ctrl-C-mid-provision resume via the daemon.
 
+## OpenAI proxy (step 8)
+
+`proxy/openai_proxy.py` is a small starlette + httpx app: `create_proxy_app(orchestrator)` exposes
+`/v1/models` (lists READY deployments) and forwards `/v1/chat/completions`, `/v1/completions`,
+`/v1/embeddings` byte-for-byte with streaming, status preserved, `x-gpu-orch-deployment-id` added.
+Its only intelligence is routing the request `model` field to a READY deployment, matching BOTH the
+catalog id and the HF repo (the dual key the live gauntlet proved necessary). No payload
+normalization or fuzzy aliasing (§13). It lives in the core package so Phase 2's FastAPI can mount
+it. `gpu proxy` serves it via uvicorn; `gpu chat <id>` is a thin direct-to-endpoint REPL.
+
 ## Deferred (tracked, not silently missing)
 
-- **`gpu proxy` / `gpu chat`** are step 8 (the OpenAI proxy); the commands exist but exit with a
-  "arrives in step 8" message. Real inference testing today = deploy, read the endpoint from
-  `gpu status`, curl it directly.
 - **Provider dead-token handling.** `map_to_observed_state` folds provider "dead" tokens
   (EXITED/TERMINATED/...) to REQUESTED so next_step recreates or finishes teardown. Hardening
   (immediate destroy of a dead-but-present pod) is deferred to the real-GPU gauntlet (step 9).

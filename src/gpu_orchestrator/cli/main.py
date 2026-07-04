@@ -46,6 +46,11 @@ def _fail(exc: OrchestratorError) -> None:
     raise typer.Exit(1)
 
 
+def _fail_msg(message: str) -> None:
+    render.error(message)
+    raise typer.Exit(1)
+
+
 def _run(coro: Awaitable[_T]) -> _T:
     try:
         return asyncio.run(coro)  # type: ignore[arg-type]
@@ -268,17 +273,61 @@ def daemon() -> None:
 
 
 @app.command()
-def proxy(port: int = typer.Option(8080, "--port")) -> None:
-    """Start the OpenAI-compatible proxy (step 8)."""
-    render.error("`gpu proxy` arrives in step 8 (the OpenAI proxy).")
-    raise typer.Exit(1)
+def proxy(
+    host: str | None = typer.Option(None, "--host"),
+    port: int | None = typer.Option(None, "--port"),
+) -> None:
+    """Start the OpenAI-compatible proxy: /v1/chat/completions, /v1/completions, /v1/models,
+    /v1/embeddings, routed by model name to READY deployments."""
+    import uvicorn
+
+    from ..proxy.openai_proxy import create_proxy_app
+
+    cfg = Config()
+    host = host or cfg.proxy_host
+    port = port or cfg.proxy_port
+    render.console.print(
+        f"OpenAI proxy on [b]http://{host}:{port}[/b] -> READY deployments. Ctrl-C to stop."
+    )
+    uvicorn.run(create_proxy_app(_orchestrator()), host=host, port=port, log_level="warning")
 
 
 @app.command()
 def chat(deployment_id: str) -> None:
-    """Minimal REPL against a READY deployment (step 8)."""
-    render.error("`gpu chat` arrives in step 8 (the OpenAI proxy).")
-    raise typer.Exit(1)
+    """Minimal REPL against a READY deployment (a thin httpx loop, not through the proxy)."""
+    import httpx
+
+    orch = _orchestrator()
+    dep = _call(orch.get_deployment, deployment_id)
+    if dep.observed_state.value != "ready" or not dep.endpoint_url:
+        _fail_msg(f"{deployment_id} is not READY (state: {dep.observed_state.value}).")
+    served = {m.id: m.hf_repo for m in orch.list_models()}
+    model = served.get(dep.model_id, dep.model_id)
+    render.console.print(f"Chatting with [b]{dep.model_id}[/b]. Type 'exit' or Ctrl-C to quit.")
+
+    messages: list[dict] = []
+    while True:
+        try:
+            content = typer.prompt("you")
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            break
+        if content.strip().lower() in ("exit", "quit"):
+            break
+        messages.append({"role": "user", "content": content})
+        try:
+            resp = httpx.post(
+                f"{dep.endpoint_url}/v1/chat/completions",
+                json={"model": model, "messages": messages},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            reply = resp.json()["choices"][0]["message"]
+        except (httpx.HTTPError, KeyError, IndexError) as exc:
+            render.error(f"request failed: {exc}")
+            messages.pop()
+            continue
+        messages.append({"role": "assistant", "content": reply.get("content") or ""})
+        render.console.print(f"[green]{dep.model_id}[/green]: {reply.get('content') or ''}")
 
 
 if __name__ == "__main__":
