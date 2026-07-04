@@ -93,8 +93,11 @@ class RunPodProvider(Provider):
             # (runpod-ephemeral). Empty list => use the image default.
             "dockerEntrypoint": request.command or None,
         }
+        # RunPod REST v1 wants ports as a JSON array of "<port>/<proto>" strings, not a joined
+        # string (verified against the live 400: "/pods/properties/ports/type: got string, want
+        # array"). runpod-ephemeral's comma-joined form was for an older API.
         if request.ports:
-            body["ports"] = ",".join(f"{p}/http" for p in request.ports)
+            body["ports"] = [f"{p}/http" for p in request.ports]
         payload = {k: v for k, v in body.items() if v is not None}
         try:
             async with self._client() as client:

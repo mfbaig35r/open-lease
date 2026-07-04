@@ -62,13 +62,21 @@ async def test_health_check_ok_and_fail():
     assert (await down_rt.health_check("http://pod:8000")).ok is False
 
 
-async def test_model_ready_checks_served_id():
-    def handler(request):
+async def test_model_ready_true_when_a_model_is_served():
+    # vLLM serves the model under its HF repo id (e.g. "Qwen/Qwen3-0.6B"), which differs from our
+    # catalog id ("qwen3-0.6b"). One model per pod, so any served model means ready -- matching the
+    # catalog id exactly would never pass on a real deploy (found in the step-9 gauntlet).
+    def serving(request):
         return httpx.Response(200, json={"data": [{"id": "Qwen/Qwen3-0.6B"}]})
 
-    rt = VLLMRuntime(transport=httpx.MockTransport(handler))
-    assert (await rt.model_ready("http://pod:8000", "Qwen/Qwen3-0.6B")).ok is True
-    assert (await rt.model_ready("http://pod:8000", "other/model")).ok is False
+    rt = VLLMRuntime(transport=httpx.MockTransport(serving))
+    assert (await rt.model_ready("http://pod:8000", "qwen3-0.6b")).ok is True
+
+    def empty(request):
+        return httpx.Response(200, json={"data": []})
+
+    rt = VLLMRuntime(transport=httpx.MockTransport(empty))
+    assert (await rt.model_ready("http://pod:8000", "qwen3-0.6b")).ok is False
 
 
 async def test_model_ready_unreachable_is_not_ok():

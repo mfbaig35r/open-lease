@@ -85,9 +85,12 @@ class VLLMRuntime(Runtime):
             latency = (time.perf_counter() - start) * 1000
             if resp.status_code != 200:
                 return CheckResult(ok=False, latency_ms=latency, detail=f"HTTP {resp.status_code}")
-            served = {m.get("id") for m in resp.json().get("data", [])}
-            ok = model_id in served
-            detail = "serving" if ok else f"{model_id} not in {sorted(served)}"
+            served = {m.get("id") for m in resp.json().get("data", []) if m.get("id")}
+            # vLLM serves the model under its HF repo id (e.g. "Qwen/Qwen3-0.6B"), which differs
+            # from our catalog id ("qwen3-0.6b"). We launch exactly one model per pod, so any served
+            # model means the server is up and ready; matching the catalog id would never pass.
+            ok = model_id in served or bool(served)
+            detail = f"serving {sorted(served)}" if ok else "no model loaded yet"
             return CheckResult(ok=ok, latency_ms=latency, detail=detail)
         except httpx.HTTPError as exc:
             return CheckResult(ok=False, detail=f"unreachable: {exc}")
