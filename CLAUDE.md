@@ -102,18 +102,31 @@ tests) so it can follow a real provider. The CLI is thin Typer clients over the 
 (`cli/main.py` + `cli/render.py`); the mock provider now offers catalog-parity GPUs so the full
 flow runs offline.
 
-## Real-GPU gauntlet (step 9) — partial, 2026-07-04
+## Real-GPU gauntlet (step 9) — feasible scenarios passed, 2026-07-04
 
-A live `qwen3-0.6b` deploy on a RunPod RTX A4000 round-trips end to end: provision -> READY -> real
-chat completion through the RunPod proxy -> `gpu stop` -> pod verified destroyed (~$0.035). Confirmed
-live: cost-safety (a rejected create left no pod), retry/backoff -> FAILED, mid-provision recovery
-(a pod died RunPod-side and the reconciler recreated it -> two closed cost records), health checks,
-and teardown. Two real-API bugs found and fixed in commit `a51a94d`:
+Run live against real RunPod. Scenarios §18: **1, 2, 3, 3b, 5 all pass**; 4 and 6 deferred.
+- **#1** deploy qwen3-0.6b -> READY -> chat via proxy -> stop -> pod verified gone. Clean lifecycle.
+- **#2** kill the pod mid-provision -> reconciler recreated exactly one new pod, no orphan.
+- **#3** crash before persisting the instance id -> restart adopted the tagged pod by name (no
+  duplicate), `instance_adopted` emitted.
+- **#3b** orphan pod in our namespace destroyed after grace (`orphan_detected`/`orphan_destroyed`);
+  a pod in a different namespace left untouched.
+- **#5** two concurrent deployments (qwen3-0.6b on A4000 + qwen3-32b on A100) both reached READY;
+  the proxy routed `qwen3-0.6b` and `qwen3-32b` to their respective pods by model name.
+- **#4** (OOM on undersized GPU) deferred: hard to trigger cheaply (qwen3-0.6b is too small to OOM).
+- **#6** (24h soak) deferred: impractical in-session.
+
+Three real-API bugs found and fixed (commits `a51a94d`, `bd9fbc6`):
 - RunPod `POST /v1/pods` wants `ports` as a JSON array, not a comma-joined string.
-- vLLM serves under the HF repo id (`Qwen/Qwen3-0.6B`), not our catalog id, so `model_ready` now
-  treats any served model as ready (one model per pod).
-Not yet run: the full gauntlet checklist (spec §18) beyond the smoke path, larger models, and
-Ctrl-C-mid-provision resume via the daemon.
+- vLLM serves under the HF repo id, not our catalog id, so `model_ready` treats any served model as
+  ready (one model per pod).
+- The proxy rewrites the request `model` field to the served (HF repo) id, since byte-for-byte
+  forwarding + catalog-id routing 404s at vLLM; also sends `Accept-Encoding: identity` by default.
+
+`catalog/models.toml` `validated_at` is now genuinely true for qwen3-0.6b and qwen3-32b (was
+aspirational before). **UX feedback from this run + a plan for the top three fixes:**
+[docs/ux-feedback.md](docs/ux-feedback.md), [docs/plan-ux-improvements.md](docs/plan-ux-improvements.md)
+(download progress/ETA, persistent model cache, invisible daemon lifecycle).
 
 ## OpenAI proxy (step 8)
 
