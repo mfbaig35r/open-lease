@@ -96,11 +96,20 @@ the reconcile path. Only `HealthMonitor` flips to DEGRADED, and only after
 store, each built on a callable core so the cores stay unit-testable: `tick_reconcile`
 (`reconcile_once` per active deployment), `tick_health` (`HealthMonitor.check_once` on serving
 deployments), `tick_sweep` (orphan sweep, §7.5, with a first-seen grace period), and `tick_costs`
-(hourly `cost_snapshot`). `run()` wires them into sleeping loops; `gpu daemon` runs it foreground.
-The inline `wait=True` path (`Orchestrator._drive`) is now paced by `reconcile_interval` (0 in
-tests) so it can follow a real provider. The CLI is thin Typer clients over the Orchestrator
-(`cli/main.py` + `cli/render.py`); the mock provider now offers catalog-parity GPUs so the full
-flow runs offline.
+(hourly `cost_snapshot`). `run()` wires them into sleeping loops. The inline `wait=True` path
+(`Orchestrator._drive`) is paced by `reconcile_interval` (0 in tests) so it can follow a real
+provider. The CLI is thin Typer clients over the Orchestrator (`cli/main.py` + `cli/render.py`); the
+mock provider offers catalog-parity GPUs so the full flow runs offline.
+
+**Lifecycle (plan-ux-improvements.md #3, shipped 2026-07-04).** `cli/process.py` owns pidfile-based
+process management: `running_pid` is the truth for "is it up?" and cleans stale pidfiles. A
+foreground `gpu daemon` / `gpu proxy` writes its own pidfile and clears it on exit; `--detach` and
+`gpu up` spawn that same foreground command in a new session (`python -m gpu_orchestrator.cli.main
+<cmd>`). Commands: `gpu daemon [--detach|--stop|--status]`, `gpu proxy` (now pidfiled),
+`gpu up`/`gpu down` (both, together). **A non-blocking `gpu deploy` with no daemon running now warns
+loudly** (or auto-starts one with `--auto-daemon` / `auto_daemon=true`) instead of silently
+stalling, which was the worst footgun. Detach is POSIX-only (`start_new_session`); Windows is out of
+Phase 1 scope.
 
 ## Real-GPU gauntlet (step 9) — feasible scenarios passed, 2026-07-04
 

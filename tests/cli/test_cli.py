@@ -31,12 +31,18 @@ def _runtime() -> VLLMRuntime:
 
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
-    orch = Orchestrator(
-        Config(namespace="test", state_db=tmp_path / "cli.db", reconcile_interval=0),
-        provider=MockProvider(namespace="test"),
-        runtime=_runtime(),
+    cfg = Config(
+        namespace="test",
+        state_db=tmp_path / "cli.db",
+        reconcile_interval=0,
+        daemon_pid_file=tmp_path / "daemon.pid",
+        proxy_pid_file=tmp_path / "proxy.pid",
+        daemon_log_file=tmp_path / "daemon.log",
+        proxy_log_file=tmp_path / "proxy.log",
     )
+    orch = Orchestrator(cfg, provider=MockProvider(namespace="test"), runtime=_runtime())
     monkeypatch.setattr(cli_main, "_orchestrator", lambda: orch)
+    monkeypatch.setattr(cli_main, "_config", lambda: cfg)
     return CliRunner(), orch
 
 
@@ -116,6 +122,28 @@ def test_unknown_model_exits_1(cli):
     result = runner.invoke(app, ["deploy", "no-such-model", "--provider", "mock"])
     assert result.exit_code == 1
     assert "Error" in result.output
+
+
+def test_deploy_warns_when_no_daemon(cli):
+    # A non-blocking deploy with no daemon must warn loudly, not silently stall.
+    runner, _ = cli
+    result = runner.invoke(app, ["deploy", "qwen3-0.6b", "--provider", "mock"])
+    assert result.exit_code == 0
+    assert "no daemon running" in result.output
+
+
+def test_daemon_status_when_not_running(cli):
+    runner, _ = cli
+    result = runner.invoke(app, ["daemon", "--status"])
+    assert result.exit_code == 0
+    assert "not running" in result.output.lower()
+
+
+def test_daemon_stop_when_not_running(cli):
+    runner, _ = cli
+    result = runner.invoke(app, ["daemon", "--stop"])
+    assert result.exit_code == 0
+    assert "No daemon running" in result.output
 
 
 def test_chat_rejects_non_ready_deployment(cli):

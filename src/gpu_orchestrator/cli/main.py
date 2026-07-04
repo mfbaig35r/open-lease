@@ -20,7 +20,7 @@ from ..core.orchestrator import Orchestrator
 from ..errors import OrchestratorError
 from ..logging import configure_logging
 from ..models import RuntimeOverrides
-from . import render
+from . import process, render
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="Deploy and run open LLMs on GPUs."
@@ -67,9 +67,14 @@ def _call(fn: Callable[..., _T], *args: object, **kwargs: object) -> _T:
         raise  # unreachable
 
 
+def _config() -> Config:
+    # Seam for tests: monkeypatch to point pidfiles/state at a tmp dir.
+    return Config()
+
+
 def _orchestrator() -> Orchestrator:
     # Seam for tests: monkeypatch this to inject a mock-backed Orchestrator.
-    return Orchestrator(Config())
+    return Orchestrator(_config())
 
 
 def _overrides(sets: list[str] | None) -> RuntimeOverrides | None:
@@ -95,6 +100,7 @@ def deploy(
     gpu: str | None = typer.Option(None, "--gpu", help="Override the profile's recommended GPU."),
     wait: bool = typer.Option(False, "--wait", help="Block until READY or FAILED."),
     set_: list[str] | None = typer.Option(None, "--set", help="Override key=value (repeatable)."),
+    auto_daemon: bool = typer.Option(False, "--auto-daemon", help="Start a daemon if none is up."),
 ) -> None:
     """Deploy a model. Returns immediately unless --wait."""
     orch = _orchestrator()
@@ -102,6 +108,18 @@ def deploy(
         orch.deploy_model(model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_))
     )
     render.console.print(f"Deployment [b]{dep.id}[/b] -> {dep.observed_state.value}")
+    # A non-blocking deploy only progresses if a daemon reconciles it. Never let it stall quietly.
+    if not wait:
+        cfg = orch.config
+        if process.running_pid(cfg.daemon_pid_file) is None:
+            if auto_daemon or cfg.auto_daemon:
+                pid = process.spawn_detached(["daemon"], cfg.daemon_log_file)
+                render.console.print(f"Started daemon (pid {pid}) to drive this deployment.")
+            else:
+                render.warn(
+                    f"no daemon running, so {dep.id} will not progress",
+                    hint="start one with `gpu daemon --detach` / `gpu up`, or deploy with --wait",
+                )
 
 
 @app.command()
@@ -256,20 +274,47 @@ def config(json_: bool = typer.Option(False, "--json")) -> None:
 
 
 @app.command()
-def daemon() -> None:
-    """Run the reconcile, health, and orphan-sweep loops in the foreground."""
+def daemon(
+    detach: bool = typer.Option(False, "--detach", help="Run in the background."),
+    stop: bool = typer.Option(False, "--stop", help="Stop a running daemon."),
+    status: bool = typer.Option(False, "--status", help="Show whether a daemon is running."),
+) -> None:
+    """Run (or manage) the reconcile, health, and orphan-sweep loops. Foreground by default."""
     from ..core.daemon import Daemon
 
-    render.console.print(
-        "[b]gpu daemon[/b] running (reconcile / health / orphan sweep). Ctrl-C to stop."
-    )
+    cfg = _config()
+    if stop:
+        pid = process.stop(cfg.daemon_pid_file)
+        render.console.print(f"Daemon stopped (pid {pid})." if pid else "No daemon running.")
+        return
+    if status:
+        pid = process.running_pid(cfg.daemon_pid_file)
+        render.console.print(
+            f"Daemon running (pid {pid}). Logs: {cfg.daemon_log_file}"
+            if pid
+            else "Daemon not running."
+        )
+        return
+
+    existing = process.running_pid(cfg.daemon_pid_file)
+    if existing is not None:
+        _fail_msg(f"daemon already running (pid {existing})")
+    if detach:
+        pid = process.spawn_detached(["daemon"], cfg.daemon_log_file)
+        render.console.print(f"Daemon started (pid [b]{pid}[/b]). Logs: {cfg.daemon_log_file}")
+        return
+
+    process.write_pid(cfg.daemon_pid_file)
+    render.console.print("gpu daemon running (reconcile / health / orphan sweep). Ctrl-C to stop.")
     try:
-        asyncio.run(Daemon(Config()).run())
+        asyncio.run(Daemon(cfg).run())
     except KeyboardInterrupt:
         render.console.print("Daemon stopped.")
+    finally:
+        process.clear_pid(cfg.daemon_pid_file)
 
 
-# --- inference path (arrives with the proxy, step 8) ----------------------------------
+# --- inference path (proxy) -----------------------------------------------------------
 
 
 @app.command()
@@ -283,13 +328,20 @@ def proxy(
 
     from ..proxy.openai_proxy import create_proxy_app
 
-    cfg = Config()
+    cfg = _config()
+    existing = process.running_pid(cfg.proxy_pid_file)
+    if existing is not None:
+        _fail_msg(f"proxy already running (pid {existing})")
     host = host or cfg.proxy_host
     port = port or cfg.proxy_port
     render.console.print(
         f"OpenAI proxy on [b]http://{host}:{port}[/b] -> READY deployments. Ctrl-C to stop."
     )
-    uvicorn.run(create_proxy_app(_orchestrator()), host=host, port=port, log_level="warning")
+    process.write_pid(cfg.proxy_pid_file)
+    try:
+        uvicorn.run(create_proxy_app(_orchestrator()), host=host, port=port, log_level="warning")
+    finally:
+        process.clear_pid(cfg.proxy_pid_file)
 
 
 @app.command()
@@ -328,6 +380,35 @@ def chat(deployment_id: str) -> None:
             continue
         messages.append({"role": "assistant", "content": reply.get("content") or ""})
         render.console.print(f"[green]{dep.model_id}[/green]: {reply.get('content') or ''}")
+
+
+# --- combined lifecycle ---------------------------------------------------------------
+
+
+@app.command()
+def up(port: int | None = typer.Option(None, "--port")) -> None:
+    """Start the daemon and the proxy in the background (idempotent)."""
+    cfg = _config()
+    port = port or cfg.proxy_port
+    started: list[str] = []
+    if process.running_pid(cfg.daemon_pid_file) is None:
+        started.append(f"daemon (pid {process.spawn_detached(['daemon'], cfg.daemon_log_file)})")
+    if process.running_pid(cfg.proxy_pid_file) is None:
+        pid = process.spawn_detached(["proxy", "--port", str(port)], cfg.proxy_log_file)
+        started.append(f"proxy (pid {pid}) on :{port}")
+    render.console.print("Started " + ", ".join(started) if started else "Already up.")
+
+
+@app.command()
+def down() -> None:
+    """Stop the background daemon and proxy."""
+    cfg = _config()
+    d = process.stop(cfg.daemon_pid_file)
+    p = process.stop(cfg.proxy_pid_file)
+    render.console.print(
+        f"daemon: {'stopped ' + str(d) if d else 'not running'}; "
+        f"proxy: {'stopped ' + str(p) if p else 'not running'}"
+    )
 
 
 if __name__ == "__main__":

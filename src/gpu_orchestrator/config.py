@@ -28,9 +28,10 @@ from pydantic_settings import (
 
 from . import naming
 
+_CONFIG_DIR = Path.home() / ".gpu-orchestrator"
 PROJECT_TOML = Path("./gpu-orchestrator.toml")
-USER_TOML = Path.home() / ".gpu-orchestrator" / "config.toml"
-DEFAULT_STATE_DB = Path.home() / ".gpu-orchestrator" / "state.db"
+USER_TOML = _CONFIG_DIR / "config.toml"
+DEFAULT_STATE_DB = _CONFIG_DIR / "state.db"
 
 _SECRET_FIELDS = {"runpod_api_key", "hf_token"}
 
@@ -67,6 +68,15 @@ class Config(BaseSettings):
 
     # --- storage --------------------------------------------------------------------
     state_db: Path = DEFAULT_STATE_DB
+
+    # --- process lifecycle (daemon / proxy) -----------------------------------------
+    daemon_pid_file: Path = _CONFIG_DIR / "daemon.pid"
+    daemon_log_file: Path = _CONFIG_DIR / "daemon.log"
+    proxy_pid_file: Path = _CONFIG_DIR / "proxy.pid"
+    proxy_log_file: Path = _CONFIG_DIR / "proxy.log"
+    # When true, a non-blocking `gpu deploy` auto-starts a daemon if none is running instead of
+    # warning. Default is to warn, to avoid spawning surprise background processes.
+    auto_daemon: bool = False
 
     # --- reconcile / health loops (seconds) -----------------------------------------
     reconcile_interval: int = 10

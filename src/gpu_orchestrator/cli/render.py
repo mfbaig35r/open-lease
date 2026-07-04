@@ -42,6 +42,12 @@ def error(message: str, hint: str | None = None) -> None:
         _err.print(f"[dim]hint:[/dim] {hint}")
 
 
+def warn(message: str, hint: str | None = None) -> None:
+    _err.print(f"[yellow]warning:[/yellow] {message}")
+    if hint:
+        _err.print(f"[dim]hint:[/dim] {hint}")
+
+
 def emit_json(payload: object) -> None:
     console.print_json(json.dumps(payload, default=_json_default))
 

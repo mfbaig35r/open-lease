@@ -102,7 +102,13 @@ reflects storage cost. Validated live on the same qwen3-32b that took ~17 minute
 
 ---
 
-## 3. Make the daemon lifecycle invisible
+## 3. Make the daemon lifecycle invisible — SHIPPED 2026-07-04
+
+Implemented as described below. `cli/process.py` (pidfile liveness + stale cleanup + detached
+spawn); `gpu daemon [--detach|--stop|--status]`; `gpu proxy` pidfiled; `gpu up`/`gpu down`; and a
+non-blocking `gpu deploy` warns (or `--auto-daemon` starts one) instead of silently stalling.
+Verified end to end: `gpu up` -> both detached with pidfiles -> `gpu down` -> clean; deploy with no
+daemon warns and creates no pod. `auto_daemon` config default is false (warn, do not surprise-spawn).
 
 **Problem.** `gpu deploy` without `--wait` and no running daemon writes the record and never creates
 a pod, silently. `gpu daemon` and `gpu proxy` both block a terminal. There is no `gpu up`.

@@ -71,6 +71,10 @@ class Orchestrator:
         self._injected_provider = provider
         self._injected_runtime = runtime
 
+    @property
+    def config(self) -> Config:
+        return self._config
+
     def close(self) -> None:
         self._store.close()
 
