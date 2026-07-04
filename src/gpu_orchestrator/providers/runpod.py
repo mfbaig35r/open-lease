@@ -174,8 +174,11 @@ class RunPodProvider(Provider):
         return f"https://{instance.provider_instance_id}-{port}.proxy.runpod.net"
 
     async def get_logs(self, provider_instance_id: str, tail: int = 100) -> list[str]:
-        # RunPod REST exposes no pod logs; the pod is expected to ship its own (runpod-ephemeral).
-        _log.debug("runpod get_logs is a no-op: no REST log endpoint", extra={"tail": tail})
+        # RunPod exposes no pod logs via a clean API: REST v1 has no log endpoint (runpod-ephemeral)
+        # and GraphQL introspection is disabled so there is no discoverable log field (verified
+        # 2026-07-04). Console logs use a separate streaming channel. So this stays a no-op, and
+        # `gpu status` falls back to the elapsed/budget ETA rather than a real download percent.
+        _log.debug("runpod get_logs is a no-op: no log API", extra={"tail": tail})
         return []
 
     def _to_instance(self, data: dict) -> Instance:

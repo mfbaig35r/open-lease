@@ -65,13 +65,51 @@ def _state(state: DeploymentState) -> str:
 
 
 def _uptime(created_at: datetime) -> str:
-    delta = datetime.now(UTC) - created_at
-    seconds = int(delta.total_seconds())
+    return _duration((datetime.now(UTC) - created_at).total_seconds())
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
     if seconds < 60:
         return f"{seconds}s"
     if seconds < 3600:
         return f"{seconds // 60}m"
     return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
+
+
+_WAITING = {
+    DeploymentState.PROVISIONING,
+    DeploymentState.BOOTING,
+    DeploymentState.DOWNLOADING,
+    DeploymentState.STARTING,
+}
+_SERVING_BOUND = {DeploymentState.BOOTING, DeploymentState.DOWNLOADING, DeploymentState.STARTING}
+
+
+def _entered_at(deployment: Deployment, state: DeploymentState) -> datetime | None:
+    for transition in reversed(deployment.state_history):
+        if transition.to_state == state:
+            return transition.at
+    return None
+
+
+def progress_hint(deployment: Deployment) -> str | None:
+    """A short progress annotation for a deployment still coming up: a real percent when the runtime
+    exposed download progress, else elapsed-in-stage against the model's startup budget (e.g.
+    ``12m/40m``) so the user can see it is making progress, not stuck. None once serving."""
+    state = deployment.observed_state
+    if state not in _WAITING:
+        return None
+    if deployment.download_progress is not None:
+        return f"{int(deployment.download_progress * 100)}%"
+    entered = _entered_at(deployment, state)
+    if entered is None:
+        return None
+    elapsed = (datetime.now(UTC) - entered).total_seconds()
+    if state in _SERVING_BOUND:
+        budget = deployment.profile.validation.startup_timeout_seconds
+        return f"{_duration(elapsed)}/{_duration(budget)}"
+    return _duration(elapsed)
 
 
 def deployments_table(deployments: list[Deployment], accrued: dict[str, float]) -> None:
@@ -83,10 +121,12 @@ def deployments_table(deployments: list[Deployment], accrued: dict[str, float]) 
         table.add_column(col)
     for dep in deployments:
         gpu = dep.instance.gpu_type if dep.instance else "-"
+        hint = progress_hint(dep)
+        state_cell = _state(dep.observed_state) + (f" [dim]{hint}[/]" if hint else "")
         table.add_row(
             dep.id,
             dep.model_id,
-            _state(dep.observed_state),
+            state_cell,
             gpu,
             dep.endpoint_url or "-",
             _uptime(dep.created_at),

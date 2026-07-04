@@ -153,6 +153,7 @@ class Observation:
     endpoint_url: str | None
     health: HealthStatus | None
     adopted: bool = False
+    download_progress: float | None = None
 
 
 async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) -> Observation:
@@ -170,6 +171,7 @@ async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) 
 
     endpoint_url: str | None = None
     health: HealthStatus | None = None
+    download_progress: float | None = None
     if instance is not None:
         endpoint_url = await provider.resolve_endpoint_url(instance, runtime.serving_port)
         # Once a deployment is serving (READY/DEGRADED), runtime health is the health engine's job,
@@ -177,10 +179,14 @@ async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) 
         # the current serving state; a single blip must never regress it through this path.
         if deployment.observed_state in (DeploymentState.READY, DeploymentState.DEGRADED):
             return Observation(deployment.observed_state, instance, endpoint_url, None, adopted)
+        # Bring-up: best-effort download progress from runtime logs (no-op when the provider has no
+        # log API, e.g. RunPod; the ETA fallback in `gpu status` covers that case).
+        logs = await provider.get_logs(instance.provider_instance_id, tail=200)
+        download_progress = runtime.download_progress(logs)
         if endpoint_url is not None:
             health = await _probe_health(runtime, endpoint_url, deployment.model_id)
     observed = map_to_observed_state(instance, health)
-    return Observation(observed, instance, endpoint_url, health, adopted)
+    return Observation(observed, instance, endpoint_url, health, adopted, download_progress)
 
 
 async def _probe_health(runtime: Runtime, endpoint_url: str, model_id: str) -> HealthStatus:
@@ -291,6 +297,7 @@ async def reconcile_once(
     now = now or _utcnow()
     obs = await observe(deployment, provider, runtime)
     deployment.instance = obs.instance
+    deployment.download_progress = obs.download_progress  # None once serving; display-only
     if obs.endpoint_url is not None:
         deployment.endpoint_url = obs.endpoint_url
     if obs.adopted:

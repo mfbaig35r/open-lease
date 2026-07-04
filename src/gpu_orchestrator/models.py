@@ -259,6 +259,9 @@ class Deployment(BaseModel):
     profile: RuntimeProfile
     instance: Instance | None = None
     endpoint_url: str | None = None
+    # Best-effort model-download fraction (0..1) during bring-up, parsed from runtime logs when the
+    # provider exposes them; None when unavailable (e.g. RunPod has no log API). Display-only.
+    download_progress: float | None = None
     state_history: list[StateTransition] = Field(default_factory=list)
     failure: FailureInfo | None = None
     created_at: datetime = Field(default_factory=_utcnow)

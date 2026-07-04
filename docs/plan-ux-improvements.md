@@ -5,7 +5,15 @@ None require re-architecting; they are last-mile UX on a working engine.
 
 ---
 
-## 1. Download progress + ETA in `gpu status`
+## 1. Download progress + ETA in `gpu status` — SHIPPED 2026-07-04
+
+Layer B (the always-available ETA) shipped; Layer A wired as a seam. Investigation: RunPod exposes
+no clean pod-log API (REST v1 has none; GraphQL introspection is disabled, no discoverable log
+field, verified live), so real download percent is not available on RunPod. `observe` still calls
+`provider.get_logs` + `runtime.download_progress` on every bring-up tick (a no-op for RunPod, real
+for the mock and any future provider with logs) and stores `Deployment.download_progress`.
+`gpu status` shows `starting_server 45%` when a percent is known, else `starting_server 8m/40m`
+(elapsed in stage / the profile's `startup_timeout_seconds`), so a cold start never reads as stuck.
 
 **Problem.** During `starting_server`, the user sees no progress and no ETA. `DOWNLOADING` exists in
 `DeploymentState` but never surfaces because `providers/runpod.py:get_logs` returns `[]` (RunPod's

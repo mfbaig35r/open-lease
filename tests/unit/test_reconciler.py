@@ -162,6 +162,21 @@ async def test_reconcile_stop_destroys_and_settles(tmp_path):
     assert len(stopped) >= 1
 
 
+async def test_reconcile_populates_download_progress(tmp_path):
+    # When the provider exposes logs, observe parses download progress onto the deployment.
+    provider = MockProvider(namespace="test", steps_to_running=5)  # linger in provisioning
+    ctx = _ctx(tmp_path, provider)
+    dep = _new_deployment()
+    ctx["store"].save_deployment(dep)
+
+    dep = await reconcile_once(dep, **ctx)  # creates the pod
+    assert dep.instance is not None
+    provider.set_logs(dep.instance.provider_instance_id, ["Loading weights: 42%|## | 1G/2G"])
+    dep = await reconcile_once(dep, **ctx)  # observe reads the logs
+
+    assert dep.download_progress == 0.42
+
+
 async def test_reconcile_backoff_delays_retry(tmp_path):
     # With a real backoff window, a retry is held off until enough time has passed (§7.3).
     ctx = _ctx(tmp_path, MockProvider(namespace="test", fail_create=True))

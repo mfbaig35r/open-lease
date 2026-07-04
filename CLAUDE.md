@@ -168,6 +168,12 @@ Paid down: cost-record lifecycle + health flap-handling (step 6); the running po
 sweep, hourly cost snapshot, and exponential backoff spacing (step 7, via `FailureInfo.last_attempt_at`
 + `outcomes.retry_backoff_elapsed`).
 
+UX plan (docs/plan-ux-improvements.md) shipped: **#3** invisible daemon lifecycle (see the Daemon
+section) and **#1** download progress/ETA in `gpu status` (`observe` parses `download_progress` from
+runtime logs when available; `gpu status` shows `NN%` or elapsed/budget `12m/40m` so a cold start
+never looks stuck; RunPod has no log API so it uses the ETA fallback). **#2** persistent model cache
+volume is the remaining, largest one.
+
 ## Deviations from already-reviewed files
 
 - **`Runtime.serving_port: ClassVar[int]`** (step 5) added to `runtimes/base.py` (vLLM = 8000). Spec
