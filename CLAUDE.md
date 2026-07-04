@@ -80,30 +80,41 @@ Human review is mandatory at steps 3, 5, and 9 minimum.
   the long-running daemon wrapper lands with the CLI (step 7). Supersedes the "open" wording in
   spec §7.3.
 
-## Deferred from step 5 (tracked, not silently missing)
+## Reconciler vs health-engine ownership (resolved in step 6)
 
-Step 5 (reconciler + orchestrator) landed the decision core, the observe/execute boundary,
-`reconcile_once`, and the §7.1 facade. Consciously left for the step that owns them:
+The reconcile loop (§7.3, 10s) and the health poll (§10, 30s) both look at runtime health, so their
+boundary is defined explicitly: the reconciler owns instance lifecycle and the bring-up progression
+(is it READY yet); once a deployment is READY/DEGRADED the **health engine** owns runtime-health
+monitoring. `observe` enforces this: for a READY/DEGRADED deployment it only confirms the instance is
+alive and preserves the current state, so a single blip cannot regress a healthy deployment through
+the reconcile path. Only `HealthMonitor` flips to DEGRADED, and only after
+`health_failure_threshold` consecutive failures (flap absorption). Phase 1 is report-only.
+
+## Deferred (tracked, not silently missing)
 
 - **Exponential backoff spacing (10s -> 60s, spec §7.3).** The attempt cap and the per-stage
   timeout budget are in; the exponential *spacing* is not. It needs a real clock to space against,
   which is the daemon (step 7). Add a `last_attempt_at` to `FailureInfo` then, not before (no
   consumer exists yet). Baseline spacing today = the daemon's `reconcile_interval`.
-- **Cost-record lifecycle.** Nothing writes a `CostRecord` on create or closes it on stop yet, so
-  `Orchestrator.get_costs` currently returns only what is already stored. Wire create/close into
-  the reconciler's execute path in step 6 (`core/costs.py`). `estimate_cost` (pure) is done.
-- **Health thresholds / degraded-flap handling (spec §10).** The reconciler uses a minimal inline
-  liveness+readiness probe (`_probe_health`); consecutive-failure thresholds and the degraded state
-  machine are step 6 (`core/health.py`). `Orchestrator.get_health` is a thin live probe for now.
+- **Poll loops not yet running.** `reconcile_once` and `HealthMonitor.check_once` are the callable
+  cores; the long-running daemon that ticks them on `reconcile_interval` / `health_poll_interval`,
+  plus the orphan sweep and the hourly `cost_snapshot`, is step 7. `costs.emit_snapshot` exists but
+  nothing calls it on a cadence yet.
 - **Provider dead-token handling.** `map_to_observed_state` folds provider "dead" tokens
   (EXITED/TERMINATED/...) to REQUESTED so next_step recreates or finishes teardown. Hardening
   (immediate destroy of a dead-but-present pod) is deferred to the real-GPU gauntlet (step 9).
 
-## Step 5 deviations (from already-reviewed files)
+Paid down in step 6: cost-record lifecycle (opens on create / closes on destroy, wired into the
+reconciler's execute path) and health thresholds / degraded-flap handling (`core/health.py`).
 
-- **`Runtime.serving_port: ClassVar[int]`** added to `runtimes/base.py` (vLLM = 8000). Spec §8 says
-  runtimes declare their serving port; the step-4 ABC lacked it and `observe` needs it to resolve
-  the endpoint URL. Provider still owns URL shape; runtime only declares the port.
+## Deviations from already-reviewed files
+
+- **`Runtime.serving_port: ClassVar[int]`** (step 5) added to `runtimes/base.py` (vLLM = 8000). Spec
+  §8 says runtimes declare their serving port; the step-4 ABC lacked it and `observe` needs it to
+  resolve the endpoint URL. Provider still owns URL shape; runtime only declares the port.
+- **`observe` preserves READY/DEGRADED** (step 6): it stops re-probing runtime health once a
+  deployment is serving, ceding that to the health engine (see the ownership note above). This also
+  fixes a step-5 latent issue where a single post-READY probe blip regressed the state to STARTING.
 
 ## RunPod extraction source
 

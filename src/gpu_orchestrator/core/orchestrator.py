@@ -28,7 +28,6 @@ from ..models import (
     Event,
     EventKind,
     GPUType,
-    HealthState,
     HealthStatus,
     ModelSpec,
     ProviderInfo,
@@ -38,8 +37,9 @@ from ..models import (
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
+from . import health
 from .catalog import Catalog, load_catalog
-from .reconciler import observe, reconcile_once
+from .reconciler import reconcile_once
 
 _log = get_logger("orchestrator")
 
@@ -148,8 +148,9 @@ class Orchestrator:
 
     async def get_health(self, deployment_id: str) -> HealthStatus:
         deployment = self._store.get_deployment(deployment_id)
-        obs = await observe(deployment, self._provider(deployment.provider), self._runtime())
-        return obs.health or HealthStatus(status=HealthState.BOOTING, checks={})
+        return await health.run_checks(
+            deployment, self._provider(deployment.provider), self._runtime()
+        )
 
     async def get_logs(
         self, deployment_id: str, *, tail: int = 100, follow: bool = False

@@ -44,7 +44,7 @@ from ..models import (
 from ..providers.base import Provider
 from ..runtimes.base import Runtime
 from ..store import Store
-from . import outcomes
+from . import costs, outcomes
 
 _log = get_logger("reconciler")
 
@@ -172,6 +172,11 @@ async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) 
     health: HealthStatus | None = None
     if instance is not None:
         endpoint_url = await provider.resolve_endpoint_url(instance, runtime.serving_port)
+        # Once a deployment is serving (READY/DEGRADED), runtime health is the health engine's job,
+        # with flap absorption (§10). observe here only confirms the instance is alive and preserves
+        # the current serving state; a single blip must never regress it through this path.
+        if deployment.observed_state in (DeploymentState.READY, DeploymentState.DEGRADED):
+            return Observation(deployment.observed_state, instance, endpoint_url, None, adopted)
         if endpoint_url is not None:
             health = await _probe_health(runtime, endpoint_url, deployment.model_id)
     observed = map_to_observed_state(instance, health)
@@ -179,8 +184,9 @@ async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) 
 
 
 async def _probe_health(runtime: Runtime, endpoint_url: str, model_id: str) -> HealthStatus:
-    """Minimal liveness + readiness probe. Phase-1 policy (thresholds, degraded/flap handling) is
-    formalized in core/health.py at step 6; this is the reconciler's own view of "is it up"."""
+    """Bring-up readiness probe: is the server up and serving the model yet? Returns HEALTHY once
+    both pass, else BOOTING. Ongoing degradation of an already-READY deployment is the health
+    engine's concern (core/health.py), not this path's."""
     alive = await runtime.health_check(endpoint_url)
     if not alive.ok:
         return HealthStatus(status=HealthState.BOOTING, checks={"http_alive": alive})
@@ -198,14 +204,17 @@ async def execute(
     runtime: Runtime,
     catalog: Catalog,
     config: Config,
+    store: Store,
+    now: datetime,
 ) -> None:
     """The ONLY place side effects happen: a thin dispatcher, one provider/runtime call per action.
-    WAIT_*, MARK_*, and NONE have no side effect here -- the state is recorded by reconcile_once;
-    for a waiting action, the passage of time is the "action"."""
+    Instance creation/destruction also opens/closes the cost accrual (§11), tying the money to the
+    compute. WAIT_*, MARK_*, and NONE have no side effect here -- the state is recorded by
+    reconcile_once; for a waiting action, the passage of time is the "action"."""
     if action in (ReconcileAction.CREATE_INSTANCE, ReconcileAction.RETRY):
-        await _create_instance(deployment, provider, runtime, catalog, config)
+        await _create_instance(deployment, provider, runtime, catalog, config, store, now)
     elif action == ReconcileAction.DESTROY_INSTANCE:
-        await _destroy_instance(deployment, provider)
+        await _destroy_instance(deployment, provider, store, now)
     elif action == ReconcileAction.ADOPT_INSTANCE:
         deployment.instance = obs.instance
     elif action == ReconcileAction.MARK_READY:
@@ -213,7 +222,13 @@ async def execute(
 
 
 async def _create_instance(
-    deployment: Deployment, provider: Provider, runtime: Runtime, catalog: Catalog, config: Config
+    deployment: Deployment,
+    provider: Provider,
+    runtime: Runtime,
+    catalog: Catalog,
+    config: Config,
+    store: Store,
+    now: datetime,
 ) -> None:
     spec = catalog.get_spec(deployment.model_id)
     profile = deployment.profile
@@ -222,11 +237,16 @@ async def _create_instance(
     request = runtime.build_instance_request(spec, profile, gpu, name=name)
     request = _inject_secrets(request, config)
     deployment.instance = await provider.create_instance(request)
+    # Cost accrues from the moment the instance exists (§11), at the resolved GPU's rate.
+    costs.open_record(deployment, gpu.hourly_usd, now, store)
 
 
-async def _destroy_instance(deployment: Deployment, provider: Provider) -> None:
+async def _destroy_instance(
+    deployment: Deployment, provider: Provider, store: Store, now: datetime
+) -> None:
     if deployment.instance is not None:
         await provider.destroy_instance(deployment.instance.provider_instance_id)
+    costs.close_open_records(deployment.id, now, store)
     deployment.instance = None
     deployment.endpoint_url = None
 
@@ -302,6 +322,8 @@ async def reconcile_once(
             runtime=runtime,
             catalog=catalog,
             config=config,
+            store=store,
+            now=now,
         )
     except (ProviderError, RuntimeError_) as exc:
         _record_and_emit_failure(deployment, observed, exc, config, now, store, events)

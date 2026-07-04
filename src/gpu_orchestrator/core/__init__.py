@@ -1,6 +1,7 @@
-"""gpu_orchestrator.core: the orchestration engine (catalog, reconciler, orchestrator facade)."""
+"""gpu_orchestrator.core: the orchestration engine (catalog, reconciler, health, costs, facade)."""
 
 from .catalog import Catalog, load_catalog
+from .health import HealthMonitor, run_checks
 from .orchestrator import Orchestrator
 from .reconciler import (
     execute,
@@ -12,6 +13,7 @@ from .reconciler import (
 
 __all__ = [
     "Catalog",
+    "HealthMonitor",
     "Orchestrator",
     "execute",
     "load_catalog",
@@ -19,4 +21,5 @@ __all__ = [
     "next_step",
     "observe",
     "reconcile_once",
+    "run_checks",
 ]

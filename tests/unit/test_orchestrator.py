@@ -11,7 +11,7 @@ from gpu_orchestrator.config import Config
 from gpu_orchestrator.core.catalog import Catalog
 from gpu_orchestrator.core.orchestrator import Orchestrator
 from gpu_orchestrator.errors import DeploymentNotFoundError, ModelNotFoundError
-from gpu_orchestrator.models import DeploymentState, EventKind
+from gpu_orchestrator.models import DeploymentState, EventKind, HealthState
 from gpu_orchestrator.providers.mock import MockProvider
 from gpu_orchestrator.runtimes.vllm import VLLMRuntime
 from tests.fixtures.catalog import QWEN3_06B_PROFILE, QWEN3_06B_SPEC
@@ -104,3 +104,27 @@ async def test_list_providers_includes_mock(tmp_path):
     orch = _orch(tmp_path)
     providers = await orch.list_providers()
     assert any(p.name == "mock" for p in providers)
+
+
+async def test_deploy_opens_cost_record(tmp_path):
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
+    records = orch.get_costs(dep.id)
+    assert len(records) == 1
+    assert records[0].stopped_at is None  # accrual open while the instance runs
+    assert records[0].gpu_hourly_usd == 0.50
+
+
+async def test_stop_closes_cost_record(tmp_path):
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
+    await orch.stop_deployment(dep.id)
+    (record,) = orch.get_costs(dep.id)
+    assert record.stopped_at is not None
+
+
+async def test_get_health_reports_healthy(tmp_path):
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
+    status = await orch.get_health(dep.id)
+    assert status.status is HealthState.HEALTHY
