@@ -74,9 +74,36 @@ Human review is mandatory at steps 3, 5, and 9 minimum.
 
 ## Open decisions (resolve before the step that needs them)
 
-- **Reconcile-loop ownership** (spec §7.3, needed by step 5): daemon vs mandatory `--wait` vs
-  reconcile-on-invocation. Recommendation on file: daemon (an asyncio loop owning the reconciler is
-  a natural daemon, which the async decision above makes cleaner). Not yet decided.
+- **Reconcile-loop ownership: RESOLVED = daemon** (2026-07-04). A background asyncio loop owns the
+  reconciler; CLI commands are thin clients over the shared SQLite store. Deploy is non-blocking,
+  survives restart, and satisfies gauntlet #3. Step 5 builds `reconcile_once()` as the callable core;
+  the long-running daemon wrapper lands with the CLI (step 7). Supersedes the "open" wording in
+  spec §7.3.
+
+## Deferred from step 5 (tracked, not silently missing)
+
+Step 5 (reconciler + orchestrator) landed the decision core, the observe/execute boundary,
+`reconcile_once`, and the §7.1 facade. Consciously left for the step that owns them:
+
+- **Exponential backoff spacing (10s -> 60s, spec §7.3).** The attempt cap and the per-stage
+  timeout budget are in; the exponential *spacing* is not. It needs a real clock to space against,
+  which is the daemon (step 7). Add a `last_attempt_at` to `FailureInfo` then, not before (no
+  consumer exists yet). Baseline spacing today = the daemon's `reconcile_interval`.
+- **Cost-record lifecycle.** Nothing writes a `CostRecord` on create or closes it on stop yet, so
+  `Orchestrator.get_costs` currently returns only what is already stored. Wire create/close into
+  the reconciler's execute path in step 6 (`core/costs.py`). `estimate_cost` (pure) is done.
+- **Health thresholds / degraded-flap handling (spec §10).** The reconciler uses a minimal inline
+  liveness+readiness probe (`_probe_health`); consecutive-failure thresholds and the degraded state
+  machine are step 6 (`core/health.py`). `Orchestrator.get_health` is a thin live probe for now.
+- **Provider dead-token handling.** `map_to_observed_state` folds provider "dead" tokens
+  (EXITED/TERMINATED/...) to REQUESTED so next_step recreates or finishes teardown. Hardening
+  (immediate destroy of a dead-but-present pod) is deferred to the real-GPU gauntlet (step 9).
+
+## Step 5 deviations (from already-reviewed files)
+
+- **`Runtime.serving_port: ClassVar[int]`** added to `runtimes/base.py` (vLLM = 8000). Spec §8 says
+  runtimes declare their serving port; the step-4 ABC lacked it and `observe` needs it to resolve
+  the endpoint URL. Provider still owns URL shape; runtime only declares the port.
 
 ## RunPod extraction source
 

@@ -27,6 +27,7 @@ _PROGRESS_RE = re.compile(r"(\d{1,3})%")
 
 class VLLMRuntime(Runtime):
     name = "vllm"
+    serving_port = _VLLM_PORT
 
     def __init__(self, *, transport: httpx.BaseTransport | None = None) -> None:
         # transport is an injection seam for tests (httpx.MockTransport); None = real network.

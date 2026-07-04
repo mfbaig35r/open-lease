@@ -24,6 +24,10 @@ from ..models import CheckResult, GPUType, InstanceRequest, ModelSpec, RuntimePr
 
 class Runtime(ABC):
     name: ClassVar[str]
+    # The single port the model server listens on. The provider (not the runtime) turns
+    # (instance, serving_port) into a public URL, so this is all a runtime declares about routing
+    # (spec §8). vLLM serves on 8000.
+    serving_port: ClassVar[int]
 
     @abstractmethod
     def build_instance_request(
