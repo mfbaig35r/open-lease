@@ -121,9 +121,17 @@ Ctrl-C-mid-provision resume via the daemon.
 `/v1/models` (lists READY deployments) and forwards `/v1/chat/completions`, `/v1/completions`,
 `/v1/embeddings` byte-for-byte with streaming, status preserved, `x-gpu-orch-deployment-id` added.
 Its only intelligence is routing the request `model` field to a READY deployment, matching BOTH the
-catalog id and the HF repo (the dual key the live gauntlet proved necessary). No payload
-normalization or fuzzy aliasing (§13). It lives in the core package so Phase 2's FastAPI can mount
-it. `gpu proxy` serves it via uvicorn; `gpu chat <id>` is a thin direct-to-endpoint REPL.
+catalog id and the HF repo (the dual key the live gauntlet proved necessary). It lives in the core
+package so Phase 2's FastAPI can mount it. `gpu proxy` serves it via uvicorn; `gpu chat <id>` is a
+thin direct-to-endpoint REPL.
+
+**One rewrite, forced by the live loop (2026-07-04):** "byte-for-byte" and "route on the catalog id"
+are contradictory. vLLM only knows its HF repo id, so a byte-for-byte-forwarded catalog id (e.g.
+`qwen3-0.6b`) 404s at vLLM. Resolution: the proxy rewrites ONLY the `model` field to the served id
+(the HF repo); everything else is forwarded unchanged. Also, the proxy sends `Accept-Encoding:
+identity` when the client didn't ask for compression, so it never hands back a gzip body the client
+can't decode (httpx's default would otherwise inject gzip). Both verified end to end through
+`localhost` against a real pod (catalog id + HF repo, streaming and non-streaming).
 
 ## Deferred (tracked, not silently missing)
 

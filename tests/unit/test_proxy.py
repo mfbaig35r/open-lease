@@ -92,6 +92,36 @@ def test_routes_by_hf_repo(tmp_path):
     assert resp.headers["x-gpu-orch-deployment-id"] == "dep-p1"
 
 
+def test_rewrites_model_to_served_id(tmp_path):
+    # The client sends our catalog id; vLLM only knows the HF repo, so the proxy must rewrite the
+    # model field before forwarding (found live: byte-for-byte + catalog-id routing 404s at vLLM).
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["model"] = json.loads(request.content)["model"]
+        return httpx.Response(
+            200, content=_stream(b'{"ok":true}'), headers={"content-type": "application/json"}
+        )
+
+    store = Store(tmp_path / "proxy.db")
+    store.save_deployment(
+        Deployment(
+            id="dep-p1",
+            model_id="qwen3-0.6b",
+            provider="mock",
+            desired_state=DeploymentState.READY,
+            observed_state=DeploymentState.READY,
+            profile=QWEN3_06B_PROFILE,
+            endpoint_url=_ENDPOINT,
+        )
+    )
+    orch = Orchestrator(Config(namespace="test", state_db=tmp_path / "proxy.db"))
+    client = TestClient(create_proxy_app(orch, transport=httpx.MockTransport(handler)))
+
+    client.post("/v1/chat/completions", json={"model": "qwen3-0.6b", "messages": []})
+    assert seen["model"] == "Qwen/Qwen3-0.6B"  # rewritten to what the backend serves
+
+
 def test_unknown_model_is_404(tmp_path):
     resp = _client(tmp_path).post("/v1/chat/completions", json={"model": "nope", "messages": []})
     assert resp.status_code == 404

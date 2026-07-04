@@ -76,17 +76,19 @@ def _ready_models(orchestrator: Orchestrator) -> list[dict]:
     ]
 
 
-def _route_table(orchestrator: Orchestrator) -> dict[str, tuple[str, str]]:
-    """model-name -> (deployment_id, endpoint_url) for every READY deployment, under both its
-    catalog id and its HF repo. Rebuilt per request so routing always reflects live state."""
+def _route_table(orchestrator: Orchestrator) -> dict[str, tuple[str, str, str]]:
+    """model-name -> (deployment_id, endpoint_url, served_model) for every READY deployment, keyed
+    by both its catalog id and its HF repo. ``served_model`` is what the backend actually serves
+    (the HF repo), which the request's ``model`` field is rewritten to. Rebuilt per request so
+    routing always reflects live state."""
     hf_repo = {spec.id: spec.hf_repo for spec in orchestrator.list_models()}
-    table: dict[str, tuple[str, str]] = {}
+    table: dict[str, tuple[str, str, str]] = {}
     for d in orchestrator.list_deployments():
         if d.observed_state.value != "ready" or not d.endpoint_url:
             continue
-        table[d.model_id] = (d.id, d.endpoint_url)
-        if d.model_id in hf_repo:
-            table[hf_repo[d.model_id]] = (d.id, d.endpoint_url)
+        served = hf_repo.get(d.model_id, d.model_id)
+        table[d.model_id] = (d.id, d.endpoint_url, served)
+        table[served] = (d.id, d.endpoint_url, served)
     return table
 
 
@@ -94,7 +96,8 @@ async def _forward(
     orchestrator: Orchestrator, request: Request, transport: httpx.AsyncBaseTransport | None
 ) -> Response:
     body = await request.body()
-    model = _model_of(body)
+    payload = _parse(body)
+    model = payload.get("model") if payload else None
     route = _route_table(orchestrator).get(model) if model else None
     if route is None:
         return JSONResponse(
@@ -108,7 +111,14 @@ async def _forward(
             status_code=404,
         )
 
-    deployment_id, endpoint = route
+    deployment_id, endpoint, served_model = route
+    # Rewrite ONLY the model field to the id the backend serves (its HF repo); vLLM 404s on our
+    # catalog id. This is the minimum the dual-key routing requires -- everything else is forwarded
+    # unchanged. (Found live: byte-for-byte + catalog-id routing is self-contradictory.)
+    if payload is not None and payload.get("model") != served_model:
+        payload["model"] = served_model
+        body = json.dumps(payload).encode()
+
     client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(None))
     upstream_request = client.build_request(
         "POST",
@@ -133,12 +143,18 @@ async def _aclose(upstream: httpx.Response, client: httpx.AsyncClient) -> None:
     await client.aclose()
 
 
-def _model_of(body: bytes) -> str | None:
+def _parse(body: bytes) -> dict | None:
     try:
-        return json.loads(body).get("model")
-    except (json.JSONDecodeError, AttributeError):
+        parsed = json.loads(body)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
         return None
 
 
 def _forward_headers(headers) -> dict[str, str]:
-    return {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
+    forwarded = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
+    # Don't let httpx inject its own Accept-Encoding: if the client didn't ask for compression, tell
+    # the backend not to compress, so we never hand a client a gzip body it didn't request.
+    if "accept-encoding" not in {k.lower() for k in forwarded}:
+        forwarded["accept-encoding"] = "identity"
+    return forwarded
