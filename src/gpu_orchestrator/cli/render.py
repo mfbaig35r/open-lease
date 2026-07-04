@@ -1,0 +1,189 @@
+"""CLI rendering: rich tables and JSON, nothing else (spec §15, E3).
+
+Every function here takes already-fetched domain objects and prints them. No orchestration, no I/O
+beyond stdout. ``--json`` on read commands routes through ``emit_json`` so output stays scriptable.
+Colours map to state so ``gpu status`` reads at a glance.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+
+from pydantic import BaseModel
+from rich.console import Console
+from rich.table import Table
+
+from ..models import (
+    CostRecord,
+    Deployment,
+    DeploymentState,
+    Event,
+    HealthStatus,
+    ModelSpec,
+    ProviderInfo,
+)
+
+console = Console()
+_err = Console(stderr=True)
+
+_STATE_COLOR = {
+    DeploymentState.READY: "green",
+    DeploymentState.DEGRADED: "yellow",
+    DeploymentState.FAILED: "red",
+    DeploymentState.STOPPED: "dim",
+    DeploymentState.STOPPING: "dim",
+}
+
+
+def error(message: str, hint: str | None = None) -> None:
+    _err.print(f"[red]Error:[/red] {message}")
+    if hint:
+        _err.print(f"[dim]hint:[/dim] {hint}")
+
+
+def emit_json(payload: object) -> None:
+    console.print_json(json.dumps(payload, default=_json_default))
+
+
+def _json_default(obj: object) -> object:
+    if isinstance(obj, BaseModel):
+        return obj.model_dump(mode="json")
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return str(obj)
+
+
+def _state(state: DeploymentState) -> str:
+    return f"[{_STATE_COLOR.get(state, 'white')}]{state.value}[/]"
+
+
+def _uptime(created_at: datetime) -> str:
+    delta = datetime.now(UTC) - created_at
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
+
+
+def deployments_table(deployments: list[Deployment], accrued: dict[str, float]) -> None:
+    if not deployments:
+        console.print("[dim]No deployments. Try `gpu deploy <model>`.[/dim]")
+        return
+    table = Table(title="Deployments")
+    for col in ("ID", "MODEL", "STATE", "GPU", "ENDPOINT", "UPTIME", "ACCRUED $"):
+        table.add_column(col)
+    for dep in deployments:
+        gpu = dep.instance.gpu_type if dep.instance else "-"
+        table.add_row(
+            dep.id,
+            dep.model_id,
+            _state(dep.observed_state),
+            gpu,
+            dep.endpoint_url or "-",
+            _uptime(dep.created_at),
+            f"{accrued.get(dep.id, 0.0):.4f}",
+        )
+    console.print(table)
+
+
+def health_table(deployment_id: str, status: HealthStatus) -> None:
+    table = Table(title=f"Health: {deployment_id} ({status.status.value})")
+    table.add_column("CHECK")
+    table.add_column("OK")
+    table.add_column("DETAIL")
+    for name, check in status.checks.items():
+        mark = "[green]yes[/]" if check.ok else "[red]no[/]"
+        latency = f" ({check.latency_ms:.0f}ms)" if check.latency_ms is not None else ""
+        table.add_row(name, mark, f"{check.detail}{latency}")
+    console.print(table)
+
+
+def models_table(models: list[ModelSpec]) -> None:
+    table = Table(title="Model catalog")
+    for col in ("ID", "FAMILY", "PARAMS", "CONTEXT", "MIN GPU GB", "CAPABILITIES", "LICENSE"):
+        table.add_column(col)
+    for spec in models:
+        caps = ", ".join(
+            name
+            for name, on in (
+                ("chat", spec.chat),
+                ("completion", spec.completion),
+                ("embedding", spec.embedding),
+                ("vision", spec.vision),
+                ("tools", spec.supports_tools),
+                ("reasoning", spec.supports_reasoning),
+            )
+            if on
+        )
+        table.add_row(
+            spec.id,
+            spec.family,
+            spec.parameter_count,
+            str(spec.context_window),
+            str(spec.min_gpu_memory_gb),
+            caps,
+            spec.license,
+        )
+    console.print(table)
+
+
+def providers_table(providers: list[ProviderInfo]) -> None:
+    table = Table(title="Providers")
+    for col in ("NAME", "GPUS", "VOLUMES", "REGIONS"):
+        table.add_column(col)
+    for info in providers:
+        gpus = ", ".join(g.id for g in info.capabilities.gpu_types) or "-"
+        table.add_row(
+            info.name,
+            gpus,
+            "yes" if info.capabilities.supports_volumes else "no",
+            ", ".join(info.capabilities.regions) or "-",
+        )
+    console.print(table)
+
+
+def costs_table(records: list[CostRecord]) -> None:
+    if not records:
+        console.print("[dim]No cost records yet.[/dim]")
+        return
+    table = Table(title="Costs")
+    for col in ("DEPLOYMENT", "$/HR", "ACCRUED $", "PROJECTED $/MO", "OPEN"):
+        table.add_column(col)
+    total = 0.0
+    for record in records:
+        total += record.accrued_usd
+        table.add_row(
+            record.deployment_id,
+            f"{record.gpu_hourly_usd:.4f}",
+            f"{record.accrued_usd:.4f}",
+            f"{record.estimated_monthly_usd:.2f}",
+            "yes" if record.stopped_at is None else "no",
+        )
+    table.add_section()
+    table.add_row("[b]TOTAL[/b]", "", f"[b]{total:.4f}[/b]", "", "")
+    console.print(table)
+
+
+def events_table(events: list[Event]) -> None:
+    if not events:
+        console.print("[dim]No events.[/dim]")
+        return
+    table = Table(title="Timeline")
+    table.add_column("TIME")
+    table.add_column("KIND")
+    table.add_column("PAYLOAD")
+    for event in events:
+        table.add_row(event.at.isoformat(), event.kind.value, json.dumps(event.payload))
+    console.print(table)
+
+
+def config_table(effective: dict[str, object]) -> None:
+    table = Table(title="Effective config (secrets masked)")
+    table.add_column("KEY")
+    table.add_column("VALUE")
+    for key, value in effective.items():
+        table.add_row(key, str(value))
+    console.print(table)

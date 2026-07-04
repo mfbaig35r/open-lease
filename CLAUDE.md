@@ -90,22 +90,33 @@ alive and preserves the current state, so a single blip cannot regress a healthy
 the reconcile path. Only `HealthMonitor` flips to DEGRADED, and only after
 `health_failure_threshold` consecutive failures (flap absorption). Phase 1 is report-only.
 
+## Daemon (step 7)
+
+`core/daemon.py` is the loop owner (loop ownership = daemon). It runs four loops over the shared
+store, each built on a callable core so the cores stay unit-testable: `tick_reconcile`
+(`reconcile_once` per active deployment), `tick_health` (`HealthMonitor.check_once` on serving
+deployments), `tick_sweep` (orphan sweep, §7.5, with a first-seen grace period), and `tick_costs`
+(hourly `cost_snapshot`). `run()` wires them into sleeping loops; `gpu daemon` runs it foreground.
+The inline `wait=True` path (`Orchestrator._drive`) is now paced by `reconcile_interval` (0 in
+tests) so it can follow a real provider. The CLI is thin Typer clients over the Orchestrator
+(`cli/main.py` + `cli/render.py`); the mock provider now offers catalog-parity GPUs so the full
+flow runs offline.
+
 ## Deferred (tracked, not silently missing)
 
-- **Exponential backoff spacing (10s -> 60s, spec §7.3).** The attempt cap and the per-stage
-  timeout budget are in; the exponential *spacing* is not. It needs a real clock to space against,
-  which is the daemon (step 7). Add a `last_attempt_at` to `FailureInfo` then, not before (no
-  consumer exists yet). Baseline spacing today = the daemon's `reconcile_interval`.
-- **Poll loops not yet running.** `reconcile_once` and `HealthMonitor.check_once` are the callable
-  cores; the long-running daemon that ticks them on `reconcile_interval` / `health_poll_interval`,
-  plus the orphan sweep and the hourly `cost_snapshot`, is step 7. `costs.emit_snapshot` exists but
-  nothing calls it on a cadence yet.
+- **`gpu proxy` / `gpu chat`** are step 8 (the OpenAI proxy); the commands exist but exit with a
+  "arrives in step 8" message. Real inference testing today = deploy, read the endpoint from
+  `gpu status`, curl it directly.
 - **Provider dead-token handling.** `map_to_observed_state` folds provider "dead" tokens
   (EXITED/TERMINATED/...) to REQUESTED so next_step recreates or finishes teardown. Hardening
   (immediate destroy of a dead-but-present pod) is deferred to the real-GPU gauntlet (step 9).
+- **Daemon `run()` loop is not unit-tested** (it is an infinite `asyncio.gather`); the `tick_*`
+  cores it wraps are. Concurrency guards (per-deployment lock, §7.4) are single-process-simple for
+  Phase 1.
 
-Paid down in step 6: cost-record lifecycle (opens on create / closes on destroy, wired into the
-reconciler's execute path) and health thresholds / degraded-flap handling (`core/health.py`).
+Paid down: cost-record lifecycle + health flap-handling (step 6); the running poll loops, orphan
+sweep, hourly cost snapshot, and exponential backoff spacing (step 7, via `FailureInfo.last_attempt_at`
++ `outcomes.retry_backoff_elapsed`).
 
 ## Deviations from already-reviewed files
 

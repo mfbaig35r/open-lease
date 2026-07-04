@@ -33,7 +33,7 @@ def _transport() -> httpx.MockTransport:
 
 def _orch(tmp_path) -> Orchestrator:
     return Orchestrator(
-        Config(namespace="test", state_db=tmp_path / "orch.db"),
+        Config(namespace="test", state_db=tmp_path / "orch.db", reconcile_interval=0),
         catalog=Catalog({"qwen3-0.6b": QWEN3_06B_SPEC}, {"qwen3-0.6b": _PROFILE}),
         provider=MockProvider(namespace="test"),
         runtime=VLLMRuntime(transport=_transport()),

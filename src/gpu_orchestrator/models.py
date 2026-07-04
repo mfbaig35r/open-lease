@@ -240,6 +240,7 @@ class FailureInfo(BaseModel):
     message: str
     retryable: bool
     attempts: int = 0
+    last_attempt_at: datetime | None = None  # when the last attempt failed; drives retry backoff
 
 
 class Deployment(BaseModel):

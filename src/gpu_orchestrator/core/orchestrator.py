@@ -12,6 +12,7 @@ a caller passes ``wait=True`` the facade drives ``reconcile_once`` inline until 
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from datetime import datetime
 from uuid import uuid4
@@ -191,8 +192,10 @@ class Orchestrator:
     # --- internals ------------------------------------------------------------------
 
     async def _drive(self, deployment: Deployment, until: set[DeploymentState]) -> Deployment:
-        """Inline reconcile loop for the ``wait=True`` path and for stop/delete/restart. The daemon
-        uses the real clock and interval; here we tick as fast as reality advances, bounded."""
+        """Inline reconcile loop for the ``wait=True`` path and for stop/delete/restart. Paced by
+        ``config.reconcile_interval`` so it can follow a real provider (minutes to READY) without
+        hammering the API; tests set the interval to 0. The daemon owns the loop for non-blocking
+        deploys -- this is the caller-blocks path."""
         provider = self._provider(deployment.provider)
         runtime = self._runtime()
         for _ in range(_MAX_DRIVE_TICKS):
@@ -207,32 +210,20 @@ class Orchestrator:
                 store=self._store,
                 events=self._events,
             )
+            if deployment.observed_state in until:
+                return deployment
+            if self._config.reconcile_interval:
+                await asyncio.sleep(self._config.reconcile_interval)
         raise ReconcileError(
             f"deployment {deployment.id} did not settle within {_MAX_DRIVE_TICKS} ticks "
             f"(observed={deployment.observed_state.value})"
         )
 
     def _provider(self, name: str) -> Provider:
-        if self._injected_provider is not None:
-            return self._injected_provider
-        cls = PROVIDERS.get(name)
-        if cls is None:
-            raise ReconcileError(f"unknown provider {name!r}")
-        if name == "runpod":
-            key = self._config.runpod_api_key
-            return cls(
-                namespace=self._config.namespace,
-                api_key=key.get_secret_value() if key is not None else None,
-            )
-        return cls(namespace=self._config.namespace)
+        return self._injected_provider or build_provider(self._config, name)
 
     def _runtime(self, name: str = "vllm") -> Runtime:
-        if self._injected_runtime is not None:
-            return self._injected_runtime
-        cls = RUNTIMES.get(name)
-        if cls is None:
-            raise ReconcileError(f"unknown runtime {name!r}")
-        return cls()
+        return self._injected_runtime or build_runtime(name)
 
     def _emit(self, deployment: Deployment, kind: EventKind, payload: dict) -> None:
         self._events.emit(
@@ -276,3 +267,25 @@ def _match_gpu(gpu_types: list[GPUType], wanted: str) -> GPUType:
         if wanted in (gpu.id, gpu.provider_sku):
             return gpu
     raise ReconcileError(f"no GPU matching {wanted!r} in provider menu")
+
+
+def build_provider(config: Config, name: str) -> Provider:
+    """Construct a provider by name from config. Shared by the Orchestrator and the daemon so the
+    RunPod-key wiring lives in exactly one place."""
+    cls = PROVIDERS.get(name)
+    if cls is None:
+        raise ReconcileError(f"unknown provider {name!r}")
+    if name == "runpod":
+        key = config.runpod_api_key
+        return cls(
+            namespace=config.namespace,
+            api_key=key.get_secret_value() if key is not None else None,
+        )
+    return cls(namespace=config.namespace)
+
+
+def build_runtime(name: str = "vllm") -> Runtime:
+    cls = RUNTIMES.get(name)
+    if cls is None:
+        raise ReconcileError(f"unknown runtime {name!r}")
+    return cls()

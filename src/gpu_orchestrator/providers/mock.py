@@ -23,6 +23,26 @@ _MOCK_GPU = GPUType(
     provider_sku="mock-gpu",
 )
 
+# Catalog-parity GPUs so the real catalog's profiles (which recommend RunPod GPU ids) resolve
+# against the mock, letting the full deploy flow run offline and in tests (spec §8.2). Rates are
+# fictional; the mock never bills.
+_CATALOG_PARITY = [
+    GPUType(
+        id="RTX-A4000",
+        name="Mock RTX A4000",
+        memory_gb=16,
+        hourly_usd=0.17,
+        provider_sku="RTX-A4000",
+    ),
+    GPUType(
+        id="A100-80GB",
+        name="Mock A100 80GB",
+        memory_gb=80,
+        hourly_usd=1.89,
+        provider_sku="A100-80GB",
+    ),
+]
+
 
 class _Pod:
     def __init__(self, instance_id: str, name: str, gpu_type: str, ports: list[int]) -> None:
@@ -69,7 +89,9 @@ class MockProvider(Provider):
     # --- Provider interface ---------------------------------------------------------
 
     async def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(gpu_types=[_MOCK_GPU], regions=["mock-region"])
+        return ProviderCapabilities(
+            gpu_types=[_MOCK_GPU, *_CATALOG_PARITY], regions=["mock-region"]
+        )
 
     async def create_instance(self, request: InstanceRequest) -> Instance:
         if self.fail_api:

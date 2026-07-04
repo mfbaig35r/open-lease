@@ -20,6 +20,11 @@ from tests.fixtures.catalog import QWEN3_06B_PROFILE, QWEN3_06B_SPEC
 
 S = DeploymentState
 _PROFILE = QWEN3_06B_PROFILE.model_copy(update={"recommended_gpu": "MOCK-GPU"})
+_BASE = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
+
+
+def _dt(seconds: int) -> datetime:
+    return _BASE + timedelta(seconds=seconds)
 
 
 def _transport(*, ready: bool = True) -> httpx.MockTransport:
@@ -40,7 +45,12 @@ def _ctx(tmp_path, provider: MockProvider, *, ready: bool = True) -> dict:
         "provider": provider,
         "runtime": VLLMRuntime(transport=_transport(ready=ready)),
         "catalog": Catalog({"qwen3-0.6b": QWEN3_06B_SPEC}, {"qwen3-0.6b": _PROFILE}),
-        "config": Config(namespace="test", state_db=tmp_path / "state.db"),
+        "config": Config(
+            namespace="test",
+            state_db=tmp_path / "state.db",
+            retry_backoff_min=0,
+            retry_backoff_max=0,
+        ),
         "store": store,
         "events": EventLog(store),
     }
@@ -150,6 +160,31 @@ async def test_reconcile_stop_destroys_and_settles(tmp_path):
     assert dep.instance is None
     stopped = ctx["events"].query("dep-test01", kind=EventKind.DEPLOYMENT_STOPPED)
     assert len(stopped) >= 1
+
+
+async def test_reconcile_backoff_delays_retry(tmp_path):
+    # With a real backoff window, a retry is held off until enough time has passed (§7.3).
+    ctx = _ctx(tmp_path, MockProvider(namespace="test", fail_create=True))
+    ctx["config"] = Config(
+        namespace="test",
+        state_db=tmp_path / "state.db",
+        retry_backoff_min=10,
+        retry_backoff_max=60,
+    )
+    dep = _new_deployment()
+    ctx["store"].save_deployment(dep)
+
+    # Tick 1 at t0: first create fails, records attempt 1.
+    dep = await reconcile_once(dep, **ctx, now=_dt(0))
+    assert dep.failure is not None and dep.failure.attempts == 1
+
+    # Tick 2 only 3s later: inside the 10s backoff window, so no new attempt.
+    dep = await reconcile_once(dep, **ctx, now=_dt(3))
+    assert dep.failure.attempts == 1
+
+    # Tick 3 well past the window: the retry runs (and fails again -> attempt 2).
+    dep = await reconcile_once(dep, **ctx, now=_dt(30))
+    assert dep.failure.attempts == 2
 
 
 async def test_reconcile_stage_budget_escalates_stuck_provisioning(tmp_path):

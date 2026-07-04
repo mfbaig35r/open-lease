@@ -313,6 +313,11 @@ async def reconcile_once(
         return deployment
 
     action = next_step(deployment, observed, max_attempts=config.retry_max_attempts)
+    # Space out retries: if it is too soon since the last failed attempt, wait this tick (§7.3).
+    if action == ReconcileAction.RETRY and not outcomes.retry_backoff_elapsed(
+        deployment, config, now
+    ):
+        return deployment
     try:
         await execute(
             action,

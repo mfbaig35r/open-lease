@@ -82,10 +82,28 @@ def record_failure(
     retryable = isinstance(exc, ProviderAPIError | InstanceCreationError)
     prior = deployment.failure.attempts if deployment.failure else 0
     deployment.failure = FailureInfo(
-        stage=stage, message=str(exc), retryable=retryable, attempts=prior + 1
+        stage=stage,
+        message=str(exc),
+        retryable=retryable,
+        attempts=prior + 1,
+        last_attempt_at=now,
     )
     if not retryable or deployment.failure.attempts >= config.retry_max_attempts:
         transition(deployment, DeploymentState.FAILED, f"failed:{type(exc).__name__}", now)
+
+
+def retry_backoff_elapsed(deployment: Deployment, config: Config, now: datetime) -> bool:
+    """Whether enough time has passed since the last failed attempt to try again. Capped exponential
+    backoff (``retry_backoff_min`` doubling up to ``retry_backoff_max``, spec §7.3). Returns True
+    when there is no prior attempt timestamp (nothing to wait on)."""
+    failure = deployment.failure
+    if failure is None or failure.last_attempt_at is None:
+        return True
+    delay = min(
+        config.retry_backoff_max,
+        config.retry_backoff_min * (2 ** max(0, failure.attempts - 1)),
+    )
+    return (now - failure.last_attempt_at).total_seconds() >= delay
 
 
 def apply_stage_budget(
