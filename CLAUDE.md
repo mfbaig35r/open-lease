@@ -102,6 +102,19 @@ tests) so it can follow a real provider. The CLI is thin Typer clients over the 
 (`cli/main.py` + `cli/render.py`); the mock provider now offers catalog-parity GPUs so the full
 flow runs offline.
 
+## Real-GPU gauntlet (step 9) — partial, 2026-07-04
+
+A live `qwen3-0.6b` deploy on a RunPod RTX A4000 round-trips end to end: provision -> READY -> real
+chat completion through the RunPod proxy -> `gpu stop` -> pod verified destroyed (~$0.035). Confirmed
+live: cost-safety (a rejected create left no pod), retry/backoff -> FAILED, mid-provision recovery
+(a pod died RunPod-side and the reconciler recreated it -> two closed cost records), health checks,
+and teardown. Two real-API bugs found and fixed in commit `a51a94d`:
+- RunPod `POST /v1/pods` wants `ports` as a JSON array, not a comma-joined string.
+- vLLM serves under the HF repo id (`Qwen/Qwen3-0.6B`), not our catalog id, so `model_ready` now
+  treats any served model as ready (one model per pod).
+Not yet run: the full gauntlet checklist (spec §18) beyond the smoke path, larger models, and
+Ctrl-C-mid-provision resume via the daemon.
+
 ## Deferred (tracked, not silently missing)
 
 - **`gpu proxy` / `gpu chat`** are step 8 (the OpenAI proxy); the commands exist but exit with a
