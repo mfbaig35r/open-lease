@@ -49,6 +49,10 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GPU_ORCH_",
         extra="ignore",
+        # Read ./.env so the dotenv source in settings_customise_sources is actually populated;
+        # without this, that source is a no-op and the documented .env convenience does nothing.
+        env_file=".env",
+        env_file_encoding="utf-8",
         # SecretStr keeps credentials out of repr/logs by construction.
     )
 
