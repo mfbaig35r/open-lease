@@ -26,6 +26,8 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from . import naming
+
 PROJECT_TOML = Path("./gpu-orchestrator.toml")
 USER_TOML = Path.home() / ".gpu-orchestrator" / "config.toml"
 DEFAULT_STATE_DB = Path.home() / ".gpu-orchestrator" / "state.db"
@@ -105,11 +107,11 @@ class Config(BaseSettings):
 
     def instance_name(self, deployment_id: str) -> str:
         """The mandatory ``gpu-orch-{namespace}-{deployment_id}`` tag (spec §7.5)."""
-        return f"gpu-orch-{self.namespace}-{deployment_id}"
+        return naming.instance_name(self.namespace, deployment_id)
 
     def instance_prefix(self) -> str:
         """The prefix the orphan sweep filters on: only this install's pods (spec §7.5)."""
-        return f"gpu-orch-{self.namespace}-"
+        return naming.instance_prefix(self.namespace)
 
     def effective(self) -> dict[str, object]:
         """Config for display (``gpu config``) with secrets masked, never revealed."""

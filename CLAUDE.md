@@ -63,13 +63,20 @@ place that composes them. The reconcile loop operates on a `desired_state` / `ob
 
 Human review is mandatory at steps 3, 5, and 9 minimum.
 
+## Decisions
+
+- **Async vs sync provider style: RESOLVED = async end-to-end** (2026-07-03). The Provider and
+  Runtime ABCs, the Orchestrator facade (§7.1), the reconciler, the CLI commands, and the OpenAI
+  proxy are all `async def`. The spec's sync signatures in §7.1/§8/§9 are read as their async
+  equivalents. runpod-ephemeral's `httpx.AsyncClient` code transfers as-is. **The store stays sync**
+  (SQLite is synchronous and fast); async core calls it directly, wrapping in `asyncio.to_thread`
+  only if a call ever gets hot. Typer CLI commands cross the boundary with `asyncio.run` per command.
+
 ## Open decisions (resolve before the step that needs them)
 
 - **Reconcile-loop ownership** (spec §7.3, needed by step 5): daemon vs mandatory `--wait` vs
-  reconcile-on-invocation. Recommendation on file: daemon. Not yet decided.
-- **Async vs sync provider style** (needed by step 3): the RunPod extraction source
-  (`runpod-ephemeral`) is async (`httpx.AsyncClient`); the spec's Provider ABC and Orchestrator
-  facade are written sync. Decide before extracting.
+  reconcile-on-invocation. Recommendation on file: daemon (an asyncio loop owning the reconciler is
+  a natural daemon, which the async decision above makes cleaner). Not yet decided.
 
 ## RunPod extraction source
 
