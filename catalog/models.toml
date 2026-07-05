@@ -21,12 +21,12 @@ recommended_gpu = "RTX-A4000"
 min_disk_gb = 20
 
 [models.qwen3-0-6b.profile.validation]
-validated_at = "2026-07-03"
+validated_at = "2026-07-04"
 validated_provider = "runpod"
 validated_gpu = "RTX-A4000"
 validated_image = "vllm/vllm-openai:v0.9.1"
 startup_timeout_seconds = 600
-notes = "Smallest catalog model; the integration-gauntlet target."
+notes = "Validated live on RunPod: deploy -> READY -> chat -> stop, clean lifecycle."
 
 [models.llama-3-1-8b-instruct]
 id = "llama-3.1-8b-instruct"
@@ -50,12 +50,12 @@ min_disk_gb = 60
 "--max-model-len" = "32768"
 
 [models.llama-3-1-8b-instruct.profile.validation]
-validated_at = "2026-07-03"
+validated_at = ""
 validated_provider = "runpod"
 validated_gpu = "A100-80GB"
 validated_image = "vllm/vllm-openai:v0.9.1"
 startup_timeout_seconds = 1200
-notes = "Context capped to 32k via launch_args to fit KV cache on a single A100."
+notes = "UNVALIDATED: meta-llama is HF-gated (needs license acceptance); never deployed. Validate or remove before v1.0. Context capped to 32k to fit KV cache on one A100."
 
 [models.qwen3-32b]
 id = "qwen3-32b"
@@ -77,9 +77,9 @@ recommended_gpu = "A100-80GB"
 min_disk_gb = 120
 
 [models.qwen3-32b.profile.validation]
-validated_at = "2026-07-03"
+validated_at = "2026-07-05"
 validated_provider = "runpod"
 validated_gpu = "A100-80GB"
 validated_image = "vllm/vllm-openai:v0.9.1"
 startup_timeout_seconds = 2400
-notes = "First launch downloads ~65GB; expect a slow cold start."
+notes = "Validated live on an A100 in EU-RO-1; ~17m cold time-to-ready (downloads ~65GB)."
