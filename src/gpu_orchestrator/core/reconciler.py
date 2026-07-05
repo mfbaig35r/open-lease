@@ -357,6 +357,7 @@ async def reconcile_once(
         )
 
     observed = obs.observed_state
+    _release_download_lock_if_done(deployment, config, store)
     outcomes.apply_stage_budget(deployment, observed, config, now)
 
     # Steady state: already where we want to be, nothing pending. Do not churn the store.
@@ -371,6 +372,16 @@ async def reconcile_once(
     # Space out retries: if it is too soon since the last failed attempt, wait this tick (§7.3).
     if action == ReconcileAction.RETRY and not outcomes.retry_backoff_elapsed(
         deployment, config, now
+    ):
+        return deployment
+    # Cache-write safety (§14): only one deployment may cold-download a given model to the shared
+    # volume at a time. If another holds the lease, wait; the retry will proceed once it is READY.
+    if (
+        config.cache_volume_enabled
+        and action in (ReconcileAction.CREATE_INSTANCE, ReconcileAction.RETRY)
+        and not store.acquire_download_lock(
+            deployment.model_id, deployment.id, now, config.timeout_download
+        )
     ):
         return deployment
     try:
@@ -394,6 +405,17 @@ async def reconcile_once(
     store.save_deployment(deployment)
     outcomes.emit_action_events(events, deployment, action)
     return deployment
+
+
+def _release_download_lock_if_done(deployment: Deployment, config: Config, store: Store) -> None:
+    """Free the per-model cache lease once this deployment is terminal (weights cached at READY, or
+    given up at FAILED/STOPPED), so a waiting deploy of the same model can proceed. Idempotent."""
+    if config.cache_volume_enabled and deployment.observed_state in (
+        DeploymentState.READY,
+        DeploymentState.FAILED,
+        DeploymentState.STOPPED,
+    ):
+        store.release_download_lock(deployment.model_id, deployment.id)
 
 
 def _record_and_emit_failure(

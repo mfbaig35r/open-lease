@@ -172,7 +172,22 @@ UX plan (docs/plan-ux-improvements.md) shipped: **#3** invisible daemon lifecycl
 section) and **#1** download progress/ETA in `gpu status` (`observe` parses `download_progress` from
 runtime logs when available; `gpu status` shows `NN%` or elapsed/budget `12m/40m` so a cold start
 never looks stuck; RunPod has no log API so it uses the ETA fallback). **#2** persistent model cache
-volume is the remaining, largest one.
+volume shipped (opt-in shared network volume; `gpu volumes`), with **GPU availability polling** via
+RunPod GraphQL (`gpu availability`, deploy pre-flight warning, cache DC auto-selection) to soften the
+region-pinning tradeoff. Cache mechanism proven live; warm speedup pending capacity.
+
+## SQLite store beyond state (migration v2)
+
+The `store.py` SQLite DB (WAL, no ORM) is the persistence backbone (deployments/events/cost_records).
+Two coordination features live here now:
+- **Download lock** (`download_locks` table): a per-model lease so two concurrent *cold* deploys of
+  the same model do not both write weights to the shared cache volume and corrupt it. `reconcile_once`
+  gates CREATE/RETRY on it when caching is on (wait if another holds it), releases on terminal. It is
+  a lease (stale-steal past `timeout_download`), so a crashed holder never blocks a model forever.
+- **Event retention**: `store.prune_events(before)` + a daemon `tick_retention` loop
+  (`event_retention_days`, default 30) so the append-only event log stays bounded.
+SQLite is right for the single-process Phase 1; multi-process/multi-tenant is the Postgres seam
+(§7.4 single-process, multi-tenancy deferred).
 
 ## Deviations from already-reviewed files
 

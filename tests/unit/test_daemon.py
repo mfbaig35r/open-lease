@@ -112,6 +112,19 @@ async def test_orphan_sweep_destroys_after_grace(tmp_path):
     assert len(events.query(kind=EventKind.ORPHAN_DESTROYED)) == 1
 
 
+async def test_retention_prunes_old_events(tmp_path):
+    from gpu_orchestrator.models import EventKind
+    from tests.fixtures.events import make_event
+
+    daemon, store, _ = _daemon(tmp_path, MockProvider(namespace="test"), event_retention_days=30)
+    store.append_event(make_event(EventKind.DEPLOYMENT_REQUESTED))  # stamped 2026-07-03
+
+    removed = await daemon.tick_retention(now=_T0 + timedelta(days=60))
+
+    assert removed == 1
+    assert store.query_events() == []
+
+
 async def test_orphan_sweep_spares_owned_instances(tmp_path):
     provider = MockProvider(namespace="test")
     instance = await provider.create_instance(

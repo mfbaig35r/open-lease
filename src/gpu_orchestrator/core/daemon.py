@@ -17,7 +17,7 @@ Phase 1 is single-process (spec §7.4): no distributed locking.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from ..config import Config
@@ -110,6 +110,15 @@ class Daemon:
         for deployment in self._store.list_deployments(include_stopped=False):
             costs.emit_snapshot(deployment, self._store, self._events)
 
+    async def tick_retention(self, now: datetime | None = None) -> int:
+        """Prune events older than the retention window, so the append-only log stays bounded."""
+        now = now or _utcnow()
+        cutoff = now - timedelta(days=self._config.event_retention_days)
+        removed = self._store.prune_events(cutoff)
+        if removed:
+            _log.info("pruned old events", extra={"removed": removed})
+        return removed
+
     # --- the long-running loop ------------------------------------------------------
 
     async def run(self) -> None:
@@ -120,6 +129,7 @@ class Daemon:
             self._loop(self.tick_health, self._config.health_poll_interval),
             self._loop(self.tick_sweep, self._config.orphan_sweep_interval),
             self._loop(self.tick_costs, 3600),  # cost_snapshot is hourly (§11)
+            self._loop(self.tick_retention, 3600),  # prune old events hourly
         )
 
     async def _loop(self, tick, interval: int) -> None:

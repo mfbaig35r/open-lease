@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from gpu_orchestrator.errors import DeploymentNotFoundError, SchemaVersionError
 from gpu_orchestrator.models import CostRecord, DeploymentState
-from gpu_orchestrator.store import Store
+from gpu_orchestrator.store import _MIGRATIONS, Store
 from tests.fixtures.deployments import make_deployment
 from tests.fixtures.events import ALL_EVENTS
 
@@ -124,5 +124,38 @@ def test_migrations_are_idempotent_across_reopen(tmp_path):
     # Reopening runs _migrate again; it must be a no-op and data must survive.
     s2 = Store(path)
     assert s2.get_deployment("dep-persist").observed_state == DeploymentState.READY
-    assert s2._conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert s2._conn.execute("PRAGMA user_version").fetchone()[0] == len(_MIGRATIONS)
     s2.close()
+
+
+# --- download locks -------------------------------------------------------------------
+
+_T = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
+
+
+def test_download_lock_excludes_other_holders(store):
+    assert store.acquire_download_lock("m1", "depA", _T, 1800) is True
+    assert store.acquire_download_lock("m1", "depB", _T, 1800) is False  # held, fresh
+    assert store.acquire_download_lock("m1", "depA", _T, 1800) is True  # same holder refreshes
+    store.release_download_lock("m1", "depA")
+    assert store.acquire_download_lock("m1", "depB", _T, 1800) is True  # freed
+
+
+def test_download_lock_steals_stale_lease(store):
+    store.acquire_download_lock("m1", "depA", _T, 1800)
+    later = _T + timedelta(seconds=2000)  # past the TTL
+    assert store.acquire_download_lock("m1", "depB", later, 1800) is True
+
+
+def test_release_is_scoped_to_holder(store):
+    store.acquire_download_lock("m1", "depA", _T, 1800)
+    store.release_download_lock("m1", "depB")  # not the holder: no-op
+    assert store.acquire_download_lock("m1", "depB", _T, 1800) is False  # still A's
+
+
+def test_prune_events(store):
+    for event in ALL_EVENTS:  # stamped 2026-07-03
+        store.append_event(event)
+    removed = store.prune_events(datetime(2026, 7, 4, tzinfo=UTC))
+    assert removed == len(ALL_EVENTS)
+    assert store.query_events() == []

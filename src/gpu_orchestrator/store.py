@@ -51,6 +51,15 @@ _MIGRATIONS: list[str] = [
         PRIMARY KEY (deployment_id, started_at)
     );
     """,
+    # v2: per-model download lock so two concurrent cold deploys of the same model do not both
+    # write weights to the shared cache volume and corrupt it (§14). A lease, not a hard lock.
+    """
+    CREATE TABLE download_locks (
+        model_id    TEXT PRIMARY KEY,
+        holder      TEXT NOT NULL,
+        acquired_at TEXT NOT NULL
+    );
+    """,
 ]
 
 # --- Payload upgraders (own JSON payload only) ---------------------------------------
@@ -224,3 +233,49 @@ class Store:
             CostRecord.model_validate(_migrate_document("CostRecord", json.loads(r["doc"])))
             for r in rows
         ]
+
+    # --- download locks (cache-write coordination, §14) -----------------------------
+
+    def acquire_download_lock(
+        self, model_id: str, holder: str, now: datetime, ttl_seconds: int
+    ) -> bool:
+        """Claim the per-model download lease. Returns True if this ``holder`` now holds it (free,
+        already ours, or the previous holder's lease is stale past ``ttl_seconds``); False if a
+        different holder holds a fresh lease. The stale-steal keeps a crashed holder from blocking
+        a model forever."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT holder, acquired_at FROM download_locks WHERE model_id = ?", (model_id,)
+            ).fetchone()
+            if row is not None and row["holder"] != holder:
+                held_for = (now - datetime.fromisoformat(row["acquired_at"])).total_seconds()
+                if held_for < ttl_seconds:
+                    return False
+            self._conn.execute(
+                """
+                INSERT INTO download_locks (model_id, holder, acquired_at) VALUES (?, ?, ?)
+                ON CONFLICT(model_id) DO UPDATE SET holder = excluded.holder,
+                    acquired_at = excluded.acquired_at
+                """,
+                (model_id, holder, now.isoformat()),
+            )
+            self._conn.commit()
+            return True
+
+    def release_download_lock(self, model_id: str, holder: str) -> None:
+        """Release the lease if this ``holder`` holds it (idempotent, no-op otherwise)."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM download_locks WHERE model_id = ? AND holder = ?", (model_id, holder)
+            )
+            self._conn.commit()
+
+    # --- retention ------------------------------------------------------------------
+
+    def prune_events(self, before: datetime) -> int:
+        """Delete events older than ``before``; returns how many were removed. The event log is
+        append-only and otherwise grows unbounded under a long-running daemon."""
+        with self._lock:
+            cursor = self._conn.execute("DELETE FROM events WHERE at < ?", (before.isoformat(),))
+            self._conn.commit()
+            return cursor.rowcount

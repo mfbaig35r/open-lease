@@ -4,6 +4,8 @@ against the mock; the live warm/cold speedup is validated separately against rea
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
@@ -142,6 +144,47 @@ async def test_cache_auto_selects_available_dc(tmp_path):
     volumes = await provider.list_volumes()
     assert len(volumes) == 1
     assert volumes[0].data_center_id == "MOCK-DC-1"  # the available one
+
+
+async def test_download_lock_blocks_concurrent_cold_deploy(tmp_path):
+    # Two cold deploys of the same model would both write weights to the shared volume. The second
+    # must wait (no pod) while the first holds the lease, then proceed once it is released.
+    provider = MockProvider(namespace="test")
+    cfg = Config(
+        namespace="test",
+        state_db=tmp_path / "v.db",
+        cache_volume_enabled=True,
+        runpod_data_center_id="DC1",
+    )
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
+    store = Store(cfg.state_db)
+    store.acquire_download_lock("qwen3-0.6b", "dep-other", now, cfg.timeout_download)
+
+    dep = Deployment(
+        id="dep-v1",
+        model_id="qwen3-0.6b",
+        provider="mock",
+        desired_state=S.READY,
+        observed_state=S.REQUESTED,
+        profile=_PROFILE,
+    )
+    store.save_deployment(dep)
+    ctx = {
+        "provider": provider,
+        "runtime": _runtime(),
+        "catalog": Catalog({"qwen3-0.6b": QWEN3_06B_SPEC}, {"qwen3-0.6b": _PROFILE}),
+        "config": cfg,
+        "store": store,
+        "events": EventLog(store),
+    }
+
+    dep = await reconcile_once(dep, **ctx, now=now)
+    assert dep.instance is None  # blocked by the other holder's lease
+    assert await provider.list_instances() == []
+
+    store.release_download_lock("qwen3-0.6b", "dep-other")
+    dep = await reconcile_once(dep, **ctx, now=now)
+    assert dep.instance is not None  # lease free -> proceeds
 
 
 async def test_cache_auto_select_fails_without_capacity(tmp_path):

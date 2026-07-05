@@ -88,6 +88,9 @@ class Config(BaseSettings):
     # warning. Default is to warn, to avoid spawning surprise background processes.
     auto_daemon: bool = False
 
+    # --- retention ------------------------------------------------------------------
+    event_retention_days: int = 30  # the daemon prunes events older than this
+
     # --- reconcile / health loops (seconds) -----------------------------------------
     reconcile_interval: int = 10
     orphan_sweep_interval: int = 300
