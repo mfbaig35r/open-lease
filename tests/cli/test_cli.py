@@ -160,6 +160,17 @@ def test_daemon_stop_when_not_running(cli):
     assert "No daemon running" in result.output
 
 
+def test_deploy_chat_reaches_repl(cli):
+    # --chat deploys, waits for READY, then opens the REPL; "exit" quits cleanly (no network hit).
+    runner, _ = cli
+    result = runner.invoke(
+        app, ["deploy", "qwen3-0.6b", "--provider", "mock", "--chat"], input="exit\n"
+    )
+    assert result.exit_code == 0
+    assert "ready" in result.output
+    assert "Chatting with qwen3-0.6b" in result.output
+
+
 def test_chat_rejects_non_ready_deployment(cli):
     runner, orch = cli
     # A deployment that was never driven to READY: chat should refuse, not hang on a dead endpoint.

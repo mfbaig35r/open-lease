@@ -113,16 +113,23 @@ def deploy(
     provider: str = typer.Option("runpod", "--provider"),
     gpu: str | None = typer.Option(None, "--gpu", help="Override the profile's recommended GPU."),
     wait: bool = typer.Option(False, "--wait", help="Block until READY or FAILED."),
+    chat: bool = typer.Option(False, "--chat", help="Wait for READY, then open a chat REPL."),
     set_: list[str] | None = typer.Option(None, "--set", help="Override key=value (repeatable)."),
     auto_daemon: bool = typer.Option(False, "--auto-daemon", help="Start a daemon if none is up."),
 ) -> None:
-    """Deploy a model. Returns immediately unless --wait."""
+    """Deploy a model. Returns immediately unless --wait (or --chat, which implies it)."""
     orch = _orchestrator()
     _preflight_capacity(orch, model, provider)
+    wait = wait or chat  # can't chat until it is READY
     dep = _run(
         orch.deploy_model(model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_))
     )
     render.console.print(f"Deployment [b]{dep.id}[/b] -> {dep.observed_state.value}")
+    if chat:
+        if dep.observed_state.value != "ready":
+            _fail_msg(f"{dep.id} did not reach READY (state: {dep.observed_state.value}).")
+        _run_chat(orch, dep)
+        return
     # A non-blocking deploy only progresses if a daemon reconciles it. Never let it stall quietly.
     if not wait:
         cfg = orch.config
@@ -393,12 +400,18 @@ def proxy(
 @app.command()
 def chat(deployment_id: str) -> None:
     """Minimal REPL against a READY deployment (a thin httpx loop, not through the proxy)."""
-    import httpx
-
     orch = _orchestrator()
     dep = _call(orch.get_deployment, deployment_id)
     if dep.observed_state.value != "ready" or not dep.endpoint_url:
         _fail_msg(f"{deployment_id} is not READY (state: {dep.observed_state.value}).")
+    _run_chat(orch, dep)
+
+
+def _run_chat(orch: Orchestrator, dep) -> None:
+    """The chat REPL, shared by `gpu chat` and `gpu deploy --chat`. Hits the deployment endpoint
+    directly with the served (HF repo) model id."""
+    import httpx
+
     served = {m.id: m.hf_repo for m in orch.list_models()}
     model = served.get(dep.model_id, dep.model_id)
     render.console.print(f"Chatting with [b]{dep.model_id}[/b]. Type 'exit' or Ctrl-C to quit.")
