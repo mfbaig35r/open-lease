@@ -96,6 +96,23 @@ a second one. Still to validate with spend: a pod actually booting with the volu
 redeploy reusing the cache (the speedup is only clearly measurable on a large model like qwen3-32b,
 since a small model's download is dwarfed by the ~8GB vLLM image pull, which is NOT cached).
 
+### Live pod validation (2026-07-05) — mechanism proven, warm blocked by capacity
+
+Ran qwen3-32b cold with caching on: created the 100GB volume in a DC, downloaded 65GB of weights to
+it, mounted at `/cache` with `HF_HOME` set, and served (chat returned "Hello."). **Cold
+time-to-ready 17m20s.** So the cache mechanism works end to end on real RunPod. The warm redeploy
+could NOT be measured: it correctly reused the same volume but the pod create failed because the
+pinned data center ran out of A100 capacity between runs (empirically: US-KS-2 had no A100 at start,
+EU-RO-1 had it for the cold deploy then went dry for the warm). This is the region-pinning downside,
+demonstrated: a cached deploy is only as available as its one pinned DC's transient GPU stock, and it
+cannot fall back. Cost-safe throughout (failed creates left 0 pods; warm accrued $0.00). Also fixed a
+robustness bug found here: `ensure_cache_volume` now matches name AND data center, so a same-name
+volume in a stale DC is not wrongly reused.
+
+**Open follow-up:** the warm speedup number itself is still unmeasured (blocked by capacity, not
+code). Retriable any time the chosen DC has A100 stock. Worth considering: a fallback that, if the
+pinned DC is dry, warns and offers a no-cache deploy (full capacity spread) rather than failing.
+
 ### Resulting design (de-risked)
 
 - **Shared per-namespace network volume** at a fixed `dataCenterId`, mounted at the HF cache dir,

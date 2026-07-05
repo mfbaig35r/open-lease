@@ -193,7 +193,10 @@ class RunPodProvider(Provider):
         if not region:
             raise ProviderAPIError("cache volume requires a data center id (runpod_data_center_id)")
         for volume in await self._raw_volumes():
-            if volume.get("name") == name:
+            # Match name AND data center: a same-name volume in another DC (e.g. the configured DC
+            # changed) must not be reused, or the pod pins to a region the volume is not in and the
+            # create fails. Found live 2026-07-04.
+            if volume.get("name") == name and volume.get("dataCenterId") == region:
                 return str(volume["id"])
         body = {"name": name, "size": size_gb, "dataCenterId": region}
         try:

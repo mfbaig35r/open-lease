@@ -83,6 +83,16 @@ async def test_ensure_cache_volume_is_idempotent():
     assert len(await provider.list_volumes()) == 1  # not duplicated
 
 
+async def test_ensure_cache_volume_distinct_per_data_center():
+    # A same-name volume in another DC must not be reused (found live: it pins the pod to the wrong
+    # region and the create fails).
+    provider = MockProvider(namespace="test")
+    a = await provider.ensure_cache_volume("cache", 100, "DC1")
+    b = await provider.ensure_cache_volume("cache", 100, "DC2")
+    assert a != b
+    assert len(await provider.list_volumes()) == 2
+
+
 async def test_orchestrator_list_and_delete_volume(tmp_path):
     provider = MockProvider(namespace="test")
     await provider.ensure_cache_volume("gpu-orch-test-cache", 50, "DC1")

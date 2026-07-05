@@ -155,8 +155,8 @@ class MockProvider(Provider):
 
     async def ensure_cache_volume(self, name: str, size_gb: int, region: str | None) -> str:
         for volume in self._volumes.values():
-            if volume.name == name:
-                return volume.id  # find-or-create: idempotent by name
+            if volume.name == name and volume.data_center_id == region:
+                return volume.id  # find-or-create: idempotent by name + data center
         self._volume_counter += 1
         volume_id = f"vol-{self._volume_counter}"
         self._volumes[volume_id] = VolumeInfo(
