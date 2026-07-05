@@ -33,7 +33,7 @@ PROJECT_TOML = Path("./gpu-orchestrator.toml")
 USER_TOML = _CONFIG_DIR / "config.toml"
 DEFAULT_STATE_DB = _CONFIG_DIR / "state.db"
 
-_SECRET_FIELDS = {"runpod_api_key", "hf_token"}
+_SECRET_FIELDS = {"runpod_api_key", "hf_token", "api_token"}
 
 
 def _default_namespace() -> str:
@@ -112,6 +112,11 @@ class Config(BaseSettings):
     # --- proxy ----------------------------------------------------------------------
     proxy_host: str = "localhost"
     proxy_port: int = 8080
+
+    # --- REST API (Phase 2) ---------------------------------------------------------
+    api_host: str = "localhost"  # bind localhost by default; set explicitly to expose on a network
+    api_port: int = 8000
+    api_token: SecretStr | None = None  # if set, all routes require `Authorization: Bearer <token>`
 
     @classmethod
     def settings_customise_sources(

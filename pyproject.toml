@@ -21,6 +21,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "starlette>=0.37",
+    "fastapi>=0.110",
     "uvicorn>=0.30",
 ]
 

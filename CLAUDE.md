@@ -176,6 +176,17 @@ volume shipped (opt-in shared network volume; `gpu volumes`), with **GPU availab
 RunPod GraphQL (`gpu availability`, deploy pre-flight warning, cache DC auto-selection) to soften the
 region-pinning tradeoff. Cache mechanism proven live; warm speedup pending capacity.
 
+## REST API (Phase 2, shipped 2026-07-05)
+
+`api/app.py` is a thin FastAPI layer: `create_app(orchestrator)` with routes mirroring the
+Orchestrator 1:1 (`/deployments` CRUD + `/stop`,`/restart`,`/logs`,`/health`,`/events`; `/models`,
+`/providers`, `/availability`, `/costs`, `/volumes`, `/estimate`), request/response bodies are the
+§6 Pydantic models (only `DeployRequest`/`EstimateRequest` are interface DTOs), and the OpenAI proxy
+is mounted at `/v1/*`. Auth is a single static bearer token (`api_token`; open when unset, so
+`api_host` defaults to localhost). `OrchestratorError` maps to 404/400 via one exception handler.
+`gpu serve` runs it via uvicorn; auto-docs at `/docs`. Interfaces stay thin: same core, different
+shape. Phase 4 (Swamp) consumes this API and is now unblocked.
+
 ## SQLite store beyond state (migration v2)
 
 The `store.py` SQLite DB (WAL, no ORM) is the persistence backbone (deployments/events/cost_records).

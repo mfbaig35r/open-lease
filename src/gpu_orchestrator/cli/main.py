@@ -398,6 +398,26 @@ def proxy(
 
 
 @app.command()
+def serve(
+    host: str | None = typer.Option(None, "--host"),
+    port: int | None = typer.Option(None, "--port"),
+) -> None:
+    """Start the REST API (management routes + the OpenAI proxy at /v1/*)."""
+    import uvicorn
+
+    from ..api import create_app
+
+    cfg = _config()
+    host = host or cfg.api_host
+    port = port or cfg.api_port
+    authed = "token required" if cfg.api_token is not None else "OPEN (no api_token set)"
+    render.console.print(
+        f"open-lease API on [b]http://{host}:{port}[/b] ({authed}). Docs at /docs. Ctrl-C to stop."
+    )
+    uvicorn.run(create_app(_orchestrator()), host=host, port=port, log_level="warning")
+
+
+@app.command()
 def chat(deployment_id: str) -> None:
     """Minimal REPL against a READY deployment (a thin httpx loop, not through the proxy)."""
     orch = _orchestrator()

@@ -62,8 +62,9 @@ gpu down          # stop both
 - **Provider seam** (`providers/`): provisions compute, knows nothing about LLMs. RunPod + an
   in-memory mock; new providers are an ABC + a dict entry, verified by one contract suite.
 - **Runtime seam** (`runtimes/`): serves a model on compute, knows nothing about providers. vLLM.
-- **Interfaces**: the `gpu` CLI today; FastAPI, MCP, and a Swamp extension are specified for later
-  and mount the same core.
+- **Interfaces**: the `gpu` CLI and a REST API (`gpu serve`, routes mirroring the Orchestrator, the
+  OpenAI proxy mounted at `/v1/*`, auto-docs at `/docs`). MCP and a Swamp extension are specified for
+  later and mount the same core.
 
 See [docs/architecture.md](docs/architecture.md) for the full picture, and
 [requirements/gpu-orchestrator-requirements.md](requirements/gpu-orchestrator-requirements.md) for
