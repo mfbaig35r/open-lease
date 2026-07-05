@@ -9,7 +9,7 @@ seams the reconciler's failure-injection tests drive at build step 5.
 from __future__ import annotations
 
 from ..errors import InstanceCreationError, ProviderAPIError
-from ..models import GPUType, Instance, InstanceRequest, ProviderCapabilities
+from ..models import GPUType, Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
 from .base import Provider
 
 _PROVISIONING = "PROVISIONING"
@@ -45,11 +45,19 @@ _CATALOG_PARITY = [
 
 
 class _Pod:
-    def __init__(self, instance_id: str, name: str, gpu_type: str, ports: list[int]) -> None:
+    def __init__(
+        self,
+        instance_id: str,
+        name: str,
+        gpu_type: str,
+        ports: list[int],
+        network_volume_id: str | None = None,
+    ) -> None:
         self.id = instance_id
         self.name = name
         self.gpu_type = gpu_type
         self.ports = ports
+        self.network_volume_id = network_volume_id  # what cache volume (if any) this pod attached
         self.observations = 0
         self.logs: list[str] = []
 
@@ -74,6 +82,8 @@ class MockProvider(Provider):
         self.fail_api = fail_api
         self._pods: dict[str, _Pod] = {}
         self._counter = 0
+        self._volumes: dict[str, VolumeInfo] = {}
+        self._volume_counter = 0
 
     # --- test seams -----------------------------------------------------------------
 
@@ -100,7 +110,9 @@ class MockProvider(Provider):
             raise InstanceCreationError("mock: injected creation failure")
         self._counter += 1
         instance_id = f"mock-{self._counter}"
-        self._pods[instance_id] = _Pod(instance_id, request.name, request.gpu_type, request.ports)
+        self._pods[instance_id] = _Pod(
+            instance_id, request.name, request.gpu_type, request.ports, request.network_volume_id
+        )
         return self._instance(self._pods[instance_id])
 
     async def get_instance(self, provider_instance_id: str) -> Instance | None:
@@ -138,6 +150,25 @@ class MockProvider(Provider):
     async def get_logs(self, provider_instance_id: str, tail: int = 100) -> list[str]:
         pod = self._pods.get(provider_instance_id)
         return pod.logs[-tail:] if pod else []
+
+    # --- volumes (in-memory) --------------------------------------------------------
+
+    async def ensure_cache_volume(self, name: str, size_gb: int, region: str | None) -> str:
+        for volume in self._volumes.values():
+            if volume.name == name:
+                return volume.id  # find-or-create: idempotent by name
+        self._volume_counter += 1
+        volume_id = f"vol-{self._volume_counter}"
+        self._volumes[volume_id] = VolumeInfo(
+            id=volume_id, name=name, size_gb=size_gb, data_center_id=region
+        )
+        return volume_id
+
+    async def list_volumes(self) -> list[VolumeInfo]:
+        return list(self._volumes.values())
+
+    async def delete_volume(self, volume_id: str) -> None:
+        self._volumes.pop(volume_id, None)  # idempotent
 
     def _instance(self, pod: _Pod) -> Instance:
         return Instance(

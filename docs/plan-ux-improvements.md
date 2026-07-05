@@ -85,6 +85,17 @@ From the live REST OpenAPI spec and RunPod docs:
   failover options." Attaching removes RunPod's automatic capacity spread.
 - **Pricing.** $0.07/GB/month (first 1 TB), $0.05/GB beyond. NVMe, 200-400 MB/s (up to 10 GB/s).
 
+### Live CRUD validation (2026-07-04)
+
+Validated the volume API code against real RunPod (create/list/delete, idempotent-by-name), then
+deleted every test volume. Findings: minimum volume size is **10GB** (5GB returns a 500); valid data
+center ids include **US-KS-2, US-CA-2, EU-RO-1**; and RunPod's create is **flaky** (one call
+returned a 500 "unexpected end of JSON" but still created the volume). The find-or-create-by-name
+design self-heals that flakiness: a retry lists the orphaned volume and reuses it instead of leaking
+a second one. Still to validate with spend: a pod actually booting with the volume mounted and a warm
+redeploy reusing the cache (the speedup is only clearly measurable on a large model like qwen3-32b,
+since a small model's download is dwarfed by the ~8GB vLLM image pull, which is NOT cached).
+
 ### Resulting design (de-risked)
 
 - **Shared per-namespace network volume** at a fixed `dataCenterId`, mounted at the HF cache dir,

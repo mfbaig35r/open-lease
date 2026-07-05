@@ -69,6 +69,16 @@ class Config(BaseSettings):
     # --- storage --------------------------------------------------------------------
     state_db: Path = DEFAULT_STATE_DB
 
+    # --- persistent model cache (spec §14) ------------------------------------------
+    # Opt-in: a shared per-namespace network volume caches downloaded weights so a warm redeploy
+    # skips the download. Off by default because attaching a volume pins the pod to one data center
+    # and reduces GPU-availability spread (investigated 2026-07-04).
+    cache_volume_enabled: bool = False
+    cache_volume_size_gb: int = 100  # RunPod minimum is 10GB (verified live 2026-07-04)
+    # Required when cache_volume_enabled. RunPod data center id, e.g. US-KS-2 / US-CA-2 / EU-RO-1.
+    # The volume and its pods are pinned here, which reduces GPU-availability spread.
+    runpod_data_center_id: str | None = None
+
     # --- process lifecycle (daemon / proxy) -----------------------------------------
     daemon_pid_file: Path = _CONFIG_DIR / "daemon.pid"
     daemon_log_file: Path = _CONFIG_DIR / "daemon.log"

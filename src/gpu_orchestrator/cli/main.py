@@ -261,6 +261,24 @@ def estimate(
 
 
 @app.command()
+def volumes(
+    delete: str | None = typer.Option(None, "--delete", help="Delete a volume by id."),
+    json_: bool = typer.Option(False, "--json"),
+) -> None:
+    """List (or delete) persistent model-cache network volumes."""
+    orch = _orchestrator()
+    if delete:
+        _run(orch.delete_volume(delete))
+        render.console.print(f"Deleted volume [b]{delete}[/b]")
+        return
+    vols = _run(orch.list_volumes())
+    if json_:
+        render.emit_json(vols)
+        return
+    render.volumes_table(vols)
+
+
+@app.command()
 def config(json_: bool = typer.Option(False, "--json")) -> None:
     """Show effective config with secrets masked."""
     effective = Config().effective()

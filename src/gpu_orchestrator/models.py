@@ -195,6 +195,12 @@ class InstanceRequest(BaseModel):
     command: list[str] = Field(default_factory=list)
     cloud_type: CloudType = CloudType.ON_DEMAND
     volume: VolumeSpec | None = None
+    # Persistent model cache (spec §14): attach a pre-created network volume by id, mounted at
+    # ``volume_mount_path``. ``data_center_id`` pins the pod to the volume's region, since a network
+    # volume is region-locked. All None unless caching is enabled.
+    network_volume_id: str | None = None
+    volume_mount_path: str | None = None
+    data_center_id: str | None = None
 
 
 class Instance(BaseModel):
@@ -207,6 +213,21 @@ class Instance(BaseModel):
     state: str  # provider-native, verbatim
     public_url: str | None = None
     ports: list[int] = Field(default_factory=list)
+
+
+class VolumeInfo(BaseModel):
+    """A persistent network volume (the model cache). Returned by ``list_volumes`` (spec §14)."""
+
+    id: str
+    name: str
+    size_gb: int
+    data_center_id: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def estimated_monthly_usd(self) -> float:
+        # RunPod standard storage: $0.07/GB/month for the first 1 TB (investigated 2026-07-04).
+        return round(self.size_gb * 0.07, 2)
 
 
 class ProviderCapabilities(BaseModel):

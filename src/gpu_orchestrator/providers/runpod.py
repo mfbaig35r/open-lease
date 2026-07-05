@@ -21,7 +21,7 @@ import httpx
 
 from ..errors import InstanceCreationError, NotSupportedError, ProviderAPIError
 from ..logging import get_logger
-from ..models import CloudType, GPUType, Instance, InstanceRequest, ProviderCapabilities
+from ..models import CloudType, GPUType, Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
 from .base import Provider
 
 _BASE = "https://rest.runpod.io/v1"
@@ -98,6 +98,12 @@ class RunPodProvider(Provider):
         # array"). runpod-ephemeral's comma-joined form was for an older API.
         if request.ports:
             body["ports"] = [f"{p}/http" for p in request.ports]
+        if request.network_volume_id:
+            body["networkVolumeId"] = request.network_volume_id
+            body["volumeMountPath"] = request.volume_mount_path or "/cache"
+        if request.data_center_id:
+            # A network volume is region-locked; pin the pod to its data center (spec §14).
+            body["dataCenterIds"] = [request.data_center_id]
         payload = {k: v for k, v in body.items() if v is not None}
         try:
             async with self._client() as client:
@@ -180,6 +186,53 @@ class RunPodProvider(Provider):
         # `gpu status` falls back to the elapsed/budget ETA rather than a real download percent.
         _log.debug("runpod get_logs is a no-op: no log API", extra={"tail": tail})
         return []
+
+    # --- persistent network volumes (the model cache, spec §14) ---------------------
+
+    async def ensure_cache_volume(self, name: str, size_gb: int, region: str | None) -> str:
+        if not region:
+            raise ProviderAPIError("cache volume requires a data center id (runpod_data_center_id)")
+        for volume in await self._raw_volumes():
+            if volume.get("name") == name:
+                return str(volume["id"])
+        body = {"name": name, "size": size_gb, "dataCenterId": region}
+        try:
+            async with self._client() as client:
+                resp = await client.post("/networkvolumes", json=body)
+                resp.raise_for_status()
+                return str(resp.json()["id"])
+        except httpx.HTTPError as exc:
+            raise ProviderAPIError(f"RunPod create volume failed: {exc}") from exc
+
+    async def list_volumes(self) -> list[VolumeInfo]:
+        return [
+            VolumeInfo(
+                id=str(v["id"]),
+                name=str(v.get("name", "")),
+                size_gb=int(v.get("size", 0)),
+                data_center_id=v.get("dataCenterId"),
+            )
+            for v in await self._raw_volumes()
+        ]
+
+    async def delete_volume(self, volume_id: str) -> None:
+        try:
+            async with self._client() as client:
+                resp = await client.delete(f"/networkvolumes/{volume_id}")
+            if resp.status_code not in (200, 204, 404):  # 404 = already gone
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ProviderAPIError(f"RunPod delete volume failed: {exc}") from exc
+
+    async def _raw_volumes(self) -> list[dict]:
+        try:
+            async with self._client() as client:
+                resp = await client.get("/networkvolumes")
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPError as exc:
+            raise ProviderAPIError(f"RunPod list volumes failed: {exc}") from exc
+        return data if isinstance(data, list) else data.get("networkVolumes", [])
 
     def _to_instance(self, data: dict) -> Instance:
         return Instance(

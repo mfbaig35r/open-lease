@@ -16,7 +16,8 @@ from abc import ABC, abstractmethod
 from typing import ClassVar
 
 from .. import naming
-from ..models import Instance, InstanceRequest, ProviderCapabilities
+from ..errors import NotSupportedError
+from ..models import Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
 
 
 class Provider(ABC):
@@ -67,6 +68,18 @@ class Provider(ABC):
 
     @abstractmethod
     async def get_logs(self, provider_instance_id: str, tail: int = 100) -> list[str]: ...
+
+    # --- persistent volumes (optional capability; default unsupported) --------------
+
+    async def ensure_cache_volume(self, name: str, size_gb: int, region: str | None) -> str:
+        """Find-or-create a persistent network volume by name, returning its id (spec §14)."""
+        raise NotSupportedError(f"{type(self).__name__} does not support cache volumes")
+
+    async def list_volumes(self) -> list[VolumeInfo]:
+        return []
+
+    async def delete_volume(self, volume_id: str) -> None:
+        raise NotSupportedError(f"{type(self).__name__} does not support cache volumes")
 
 
 # Populated at import time from the concrete providers below. A dict, not a plugin loader (E1).

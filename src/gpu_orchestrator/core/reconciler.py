@@ -242,9 +242,34 @@ async def _create_instance(
     name = config.instance_name(deployment.id)
     request = runtime.build_instance_request(spec, profile, gpu, name=name)
     request = _inject_secrets(request, config)
+    request = await _attach_cache_volume(request, provider, config)
     deployment.instance = await provider.create_instance(request)
     # Cost accrues from the moment the instance exists (§11), at the resolved GPU's rate.
     costs.open_record(deployment, gpu.hourly_usd, now, store)
+
+
+async def _attach_cache_volume(
+    request: InstanceRequest, provider: Provider, config: Config
+) -> InstanceRequest:
+    """When caching is enabled, ensure the shared per-namespace network volume exists and attach it,
+    pointing the HF cache at the mount so a warm redeploy skips the download (spec §14). Opt-in; the
+    volume pins the pod to one data center."""
+    if not config.cache_volume_enabled:
+        return request
+    name = f"gpu-orch-{config.namespace}-cache"
+    volume_id = await provider.ensure_cache_volume(
+        name, config.cache_volume_size_gb, config.runpod_data_center_id
+    )
+    mount = "/cache"
+    env = {**request.env, "HF_HOME": mount, "HF_HUB_CACHE": f"{mount}/hub"}
+    return request.model_copy(
+        update={
+            "network_volume_id": volume_id,
+            "volume_mount_path": mount,
+            "data_center_id": config.runpod_data_center_id,
+            "env": env,
+        }
+    )
 
 
 async def _destroy_instance(

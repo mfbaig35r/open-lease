@@ -22,6 +22,7 @@ from ..models import (
     HealthStatus,
     ModelSpec,
     ProviderInfo,
+    VolumeInfo,
 )
 
 console = Console()
@@ -223,6 +224,22 @@ def events_table(events: list[Event]) -> None:
     table.add_column("PAYLOAD")
     for event in events:
         table.add_row(event.at.isoformat(), event.kind.value, json.dumps(event.payload))
+    console.print(table)
+
+
+def volumes_table(volumes: list[VolumeInfo]) -> None:
+    if not volumes:
+        console.print(
+            "[dim]No network volumes. Enable caching with cache_volume_enabled=true.[/dim]"
+        )
+        return
+    table = Table(title="Network volumes (model cache)")
+    for col in ("ID", "NAME", "SIZE GB", "DATA CENTER", "EST $/MO"):
+        table.add_column(col)
+    for v in volumes:
+        table.add_row(
+            v.id, v.name, str(v.size_gb), v.data_center_id or "-", f"{v.estimated_monthly_usd:.2f}"
+        )
     console.print(table)
 
 

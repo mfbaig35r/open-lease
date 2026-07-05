@@ -34,6 +34,7 @@ from ..models import (
     ProviderInfo,
     RuntimeOverrides,
     RuntimeProfile,
+    VolumeInfo,
 )
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
@@ -177,6 +178,12 @@ class Orchestrator:
                 continue  # e.g. RunPod with no API key configured on this install
             out.append(ProviderInfo(name=name, capabilities=caps))
         return out
+
+    async def list_volumes(self, *, provider: str = "runpod") -> list[VolumeInfo]:
+        return await self._provider(provider).list_volumes()
+
+    async def delete_volume(self, volume_id: str, *, provider: str = "runpod") -> None:
+        await self._provider(provider).delete_volume(volume_id)
 
     async def estimate_cost(
         self, model_id: str, *, provider: str = "runpod", hours: float = 1.0

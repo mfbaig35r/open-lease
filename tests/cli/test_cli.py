@@ -109,6 +109,13 @@ def test_stop(cli):
     assert "stopped" in result.output
 
 
+def test_volumes_lists_empty(cli):
+    runner, _ = cli
+    result = runner.invoke(app, ["volumes"])
+    assert result.exit_code == 0
+    assert "No network volumes" in result.output
+
+
 def test_config_and_providers(cli):
     runner, _ = cli
     assert runner.invoke(app, ["config"]).exit_code == 0
