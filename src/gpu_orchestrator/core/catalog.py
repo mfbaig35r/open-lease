@@ -7,6 +7,7 @@ adding a TOML block; no code change.
 
 from __future__ import annotations
 
+import importlib.resources
 import tomllib
 from pathlib import Path
 
@@ -17,12 +18,14 @@ from ..models import ModelSpec, RuntimeProfile
 
 
 def default_catalog_path() -> Path:
-    """The repo's ``catalog/models.toml`` (spec §5).
-
-    Resolved relative to this file for the editable dev install. Packaging the catalog into the
-    wheel is a follow-up (it currently lives at the repo root, outside ``src/``).
-    """
-    return Path(__file__).resolve().parents[3] / "catalog" / "models.toml"
+    """Locate ``models.toml``. In a source checkout it is the repo-root ``catalog/models.toml``
+    (spec §5, kept editable as data). In an installed wheel that file is absent, so we fall back to
+    the copy shipped inside the package at ``gpu_orchestrator/data/models.toml`` (force-included in
+    pyproject)."""
+    dev = Path(__file__).resolve().parents[3] / "catalog" / "models.toml"
+    if dev.exists():
+        return dev
+    return Path(str(importlib.resources.files("gpu_orchestrator").joinpath("data/models.toml")))
 
 
 class Catalog:
