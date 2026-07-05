@@ -21,7 +21,15 @@ import httpx
 
 from ..errors import InstanceCreationError, NotSupportedError, ProviderAPIError
 from ..logging import get_logger
-from ..models import CloudType, GPUType, Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
+from ..models import (
+    CloudType,
+    GpuAvailability,
+    GPUType,
+    Instance,
+    InstanceRequest,
+    ProviderCapabilities,
+    VolumeInfo,
+)
 from .base import Provider
 
 _BASE = "https://rest.runpod.io/v1"
@@ -226,6 +234,42 @@ class RunPodProvider(Provider):
                 resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise ProviderAPIError(f"RunPod delete volume failed: {exc}") from exc
+
+    async def gpu_availability(self, gpu_type: str | None = None) -> list[GpuAvailability]:
+        # Per-DC availability comes from GraphQL (REST v1 has no such endpoint); named queries work
+        # even though introspection is disabled (verified 2026-07-05).
+        query = "query { dataCenters { id gpuAvailability { available stockStatus gpuTypeId } } }"
+        data = await self._graphql(query)
+        rows: list[GpuAvailability] = []
+        for dc in data.get("dataCenters") or []:
+            for gpu in dc.get("gpuAvailability") or []:
+                if gpu_type is not None and gpu.get("gpuTypeId") != gpu_type:
+                    continue
+                rows.append(
+                    GpuAvailability(
+                        data_center_id=str(dc["id"]),
+                        gpu_type_id=str(gpu.get("gpuTypeId", "")),
+                        available=bool(gpu.get("available")),
+                        stock_status=gpu.get("stockStatus"),
+                    )
+                )
+        return rows
+
+    async def _graphql(self, query: str) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    "https://api.runpod.io/graphql",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"query": query},
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+        except httpx.HTTPError as exc:
+            raise ProviderAPIError(f"RunPod GraphQL request failed: {exc}") from exc
+        if payload.get("errors"):
+            raise ProviderAPIError(f"RunPod GraphQL error: {payload['errors']}")
+        return payload.get("data") or {}
 
     async def _raw_volumes(self) -> list[dict]:
         try:

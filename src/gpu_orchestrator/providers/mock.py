@@ -9,7 +9,14 @@ seams the reconciler's failure-injection tests drive at build step 5.
 from __future__ import annotations
 
 from ..errors import InstanceCreationError, ProviderAPIError
-from ..models import GPUType, Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
+from ..models import (
+    GpuAvailability,
+    GPUType,
+    Instance,
+    InstanceRequest,
+    ProviderCapabilities,
+    VolumeInfo,
+)
 from .base import Provider
 
 _PROVISIONING = "PROVISIONING"
@@ -169,6 +176,19 @@ class MockProvider(Provider):
 
     async def delete_volume(self, volume_id: str) -> None:
         self._volumes.pop(volume_id, None)  # idempotent
+
+    async def gpu_availability(self, gpu_type: str | None = None) -> list[GpuAvailability]:
+        # Deterministic fake: RTX-A4000 available in one DC, absent in another.
+        rows = [
+            GpuAvailability(
+                data_center_id="MOCK-DC-1",
+                gpu_type_id="RTX-A4000",
+                available=True,
+                stock_status="High",
+            ),
+            GpuAvailability(data_center_id="MOCK-DC-2", gpu_type_id="RTX-A4000", available=False),
+        ]
+        return [r for r in rows if gpu_type is None or r.gpu_type_id == gpu_type]
 
     def _instance(self, pod: _Pod) -> Instance:
         return Instance(

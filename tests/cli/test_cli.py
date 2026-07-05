@@ -109,6 +109,13 @@ def test_stop(cli):
     assert "stopped" in result.output
 
 
+def test_availability_lists_data_centers(cli):
+    runner, _ = cli
+    result = runner.invoke(app, ["availability", "qwen3-0.6b"])
+    assert result.exit_code == 0
+    assert "MOCK-DC-1" in result.output
+
+
 def test_volumes_lists_empty(cli):
     runner, _ = cli
     result = runner.invoke(app, ["volumes"])

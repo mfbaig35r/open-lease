@@ -28,6 +28,7 @@ from ..models import (
     DeploymentState,
     Event,
     EventKind,
+    GpuAvailability,
     GPUType,
     HealthStatus,
     ModelSpec,
@@ -181,6 +182,16 @@ class Orchestrator:
 
     async def list_volumes(self, *, provider: str = "runpod") -> list[VolumeInfo]:
         return await self._provider(provider).list_volumes()
+
+    async def gpu_availability(
+        self, *, model_id: str | None = None, gpu_type: str | None = None, provider: str = "runpod"
+    ) -> list[GpuAvailability]:
+        """Per-data-center GPU availability. Pass ``model_id`` to resolve to that model's GPU."""
+        if model_id and not gpu_type:
+            profile = self._catalog.get_profile(model_id)
+            caps = await self._provider(provider).capabilities()
+            gpu_type = _match_gpu(caps.gpu_types, profile.recommended_gpu).provider_sku
+        return await self._provider(provider).gpu_availability(gpu_type)
 
     async def delete_volume(self, volume_id: str, *, provider: str = "runpod") -> None:
         await self._provider(provider).delete_volume(volume_id)

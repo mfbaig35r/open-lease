@@ -110,8 +110,20 @@ robustness bug found here: `ensure_cache_volume` now matches name AND data cente
 volume in a stale DC is not wrongly reused.
 
 **Open follow-up:** the warm speedup number itself is still unmeasured (blocked by capacity, not
-code). Retriable any time the chosen DC has A100 stock. Worth considering: a fallback that, if the
-pinned DC is dry, warns and offers a no-cache deploy (full capacity spread) rather than failing.
+code). Retriable any time the chosen DC has A100 stock.
+
+### GPU availability polling (shipped 2026-07-05)
+
+Directly mitigates the region-pinning failure. RunPod's GraphQL (not REST) exposes per-DC
+availability: `query { dataCenters { id gpuAvailability { available stockStatus gpuTypeId } } }`
+(named queries work despite introspection being disabled). Built: `Provider.gpu_availability`
+(RunPod via GraphQL, mock fake), `Orchestrator.gpu_availability(model_id=...)`, a `gpu availability
+[<model>]` command, a best-effort deploy pre-flight warning when no DC has capacity, and cache DC
+auto-selection: when `runpod_data_center_id` is unset, `_choose_cache_dc` reuses an existing cache
+volume's DC (to keep cache hits) or picks a DC that currently has the GPU in stock (highest first),
+erroring clearly if none do. Verified live: `gpu availability qwen3-32b` shows A100-80GB in CA-MTL-3
+only, matching what stranded the warm deploy. Still a consideration: a "pinned DC dry -> offer a
+no-cache deploy in an available DC" fallback (today it errors with a clear message).
 
 ### Resulting design (de-risked)
 

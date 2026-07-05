@@ -77,6 +77,20 @@ def _orchestrator() -> Orchestrator:
     return Orchestrator(_config())
 
 
+def _preflight_capacity(orch: Orchestrator, model: str, provider: str) -> None:
+    """Best-effort: warn if no data center currently has capacity for the model's GPU, so the user
+    is not left wondering why a deploy retries and fails. Never blocks the deploy."""
+    try:
+        rows = asyncio.run(orch.gpu_availability(model_id=model, provider=provider))
+    except OrchestratorError:
+        return  # unknown model / unsupported provider / probe failed: let deploy handle it
+    if rows and not any(r.available for r in rows):
+        render.warn(
+            f"no data center currently has capacity for {model}'s GPU; the deploy may wait or fail",
+            hint="check `gpu availability " + model + "`",
+        )
+
+
 def _overrides(sets: list[str] | None) -> RuntimeOverrides | None:
     if not sets:
         return None
@@ -104,6 +118,7 @@ def deploy(
 ) -> None:
     """Deploy a model. Returns immediately unless --wait."""
     orch = _orchestrator()
+    _preflight_capacity(orch, model, provider)
     dep = _run(
         orch.deploy_model(model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_))
     )
@@ -258,6 +273,19 @@ def estimate(
         f"{est.model_id} on {est.provider} ({est.gpu_type}): "
         f"${est.estimated_usd:.4f} for {est.hours}h (${est.gpu_hourly_usd:.4f}/hr)"
     )
+
+
+@app.command()
+def availability(
+    model: str | None = typer.Argument(None, help="Filter to a model's recommended GPU."),
+    json_: bool = typer.Option(False, "--json"),
+) -> None:
+    """Per-data-center GPU availability (which data centers can run a model right now)."""
+    rows = _run(_orchestrator().gpu_availability(model_id=model))
+    if json_:
+        render.emit_json(rows)
+        return
+    render.availability_table(rows)
 
 
 @app.command()

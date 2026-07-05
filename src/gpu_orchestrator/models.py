@@ -230,6 +230,16 @@ class VolumeInfo(BaseModel):
         return round(self.size_gb * 0.07, 2)
 
 
+class GpuAvailability(BaseModel):
+    """Per-data-center availability of a GPU type (spec §8). Read-only; used to pick a data center
+    with capacity before pinning a cache volume, and to warn before a deploy that would fail."""
+
+    data_center_id: str
+    gpu_type_id: str  # provider-native sku, e.g. "NVIDIA A100 80GB PCIe"
+    available: bool
+    stock_status: str | None = None  # provider-native, e.g. "High" / "Medium" / "Low"
+
+
 class ProviderCapabilities(BaseModel):
     gpu_types: list[GPUType] = Field(default_factory=list)
     supports_volumes: bool = False

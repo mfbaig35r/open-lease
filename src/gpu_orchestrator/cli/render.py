@@ -19,6 +19,7 @@ from ..models import (
     Deployment,
     DeploymentState,
     Event,
+    GpuAvailability,
     HealthStatus,
     ModelSpec,
     ProviderInfo,
@@ -240,6 +241,21 @@ def volumes_table(volumes: list[VolumeInfo]) -> None:
         table.add_row(
             v.id, v.name, str(v.size_gb), v.data_center_id or "-", f"{v.estimated_monthly_usd:.2f}"
         )
+    console.print(table)
+
+
+def availability_table(rows: list[GpuAvailability]) -> None:
+    if not rows:
+        console.print("[dim]No availability data (unsupported provider or unknown GPU).[/dim]")
+        return
+    table = Table(title="GPU availability by data center")
+    for col in ("DATA CENTER", "GPU", "AVAILABLE", "STOCK"):
+        table.add_column(col)
+    # available first, then by stock
+    order = {"High": 0, "Medium": 1, "Low": 2}
+    for row in sorted(rows, key=lambda r: (not r.available, order.get(r.stock_status or "", 9))):
+        mark = "[green]yes[/]" if row.available else "[dim]no[/]"
+        table.add_row(row.data_center_id, row.gpu_type_id, mark, row.stock_status or "-")
     console.print(table)
 
 

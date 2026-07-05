@@ -248,6 +248,9 @@ async def _create_instance(
     costs.open_record(deployment, gpu.hourly_usd, now, store)
 
 
+_STOCK_RANK = {"High": 3, "Medium": 2, "Low": 1}
+
+
 async def _attach_cache_volume(
     request: InstanceRequest, provider: Provider, config: Config
 ) -> InstanceRequest:
@@ -257,19 +260,39 @@ async def _attach_cache_volume(
     if not config.cache_volume_enabled:
         return request
     name = f"gpu-orch-{config.namespace}-cache"
-    volume_id = await provider.ensure_cache_volume(
-        name, config.cache_volume_size_gb, config.runpod_data_center_id
-    )
+    data_center = await _choose_cache_dc(request, provider, config, name)
+    volume_id = await provider.ensure_cache_volume(name, config.cache_volume_size_gb, data_center)
     mount = "/cache"
     env = {**request.env, "HF_HOME": mount, "HF_HUB_CACHE": f"{mount}/hub"}
     return request.model_copy(
         update={
             "network_volume_id": volume_id,
             "volume_mount_path": mount,
-            "data_center_id": config.runpod_data_center_id,
+            "data_center_id": data_center,
             "env": env,
         }
     )
+
+
+async def _choose_cache_dc(
+    request: InstanceRequest, provider: Provider, config: Config, name: str
+) -> str:
+    """Which data center the cache volume lives in. Explicit config wins; otherwise reuse an
+    existing cache volume's DC (to keep cache hits), otherwise pick a DC that currently has the GPU
+    in stock (§8 availability). This turns the region-pinning failure into a smart choice."""
+    if config.runpod_data_center_id:
+        return config.runpod_data_center_id
+    for volume in await provider.list_volumes():
+        if volume.name == name and volume.data_center_id:
+            return volume.data_center_id
+    available = [a for a in await provider.gpu_availability(request.gpu_type) if a.available]
+    if not available:
+        raise ReconcileError(
+            f"no data center currently has capacity for {request.gpu_type!r}; "
+            "set runpod_data_center_id or retry later"
+        )
+    available.sort(key=lambda a: _STOCK_RANK.get(a.stock_status or "", 0), reverse=True)
+    return available[0].data_center_id
 
 
 async def _destroy_instance(

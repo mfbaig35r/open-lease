@@ -17,7 +17,7 @@ from typing import ClassVar
 
 from .. import naming
 from ..errors import NotSupportedError
-from ..models import Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
+from ..models import GpuAvailability, Instance, InstanceRequest, ProviderCapabilities, VolumeInfo
 
 
 class Provider(ABC):
@@ -76,6 +76,10 @@ class Provider(ABC):
         raise NotSupportedError(f"{type(self).__name__} does not support cache volumes")
 
     async def list_volumes(self) -> list[VolumeInfo]:
+        return []
+
+    async def gpu_availability(self, gpu_type: str | None = None) -> list[GpuAvailability]:
+        """Per-data-center availability, optionally filtered to one provider-native GPU sku (§8)."""
         return []
 
     async def delete_volume(self, volume_id: str) -> None:

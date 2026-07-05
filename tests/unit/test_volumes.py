@@ -5,11 +5,13 @@ against the mock; the live warm/cold speedup is validated separately against rea
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from gpu_orchestrator.config import Config
 from gpu_orchestrator.core.catalog import Catalog
 from gpu_orchestrator.core.orchestrator import Orchestrator
 from gpu_orchestrator.core.reconciler import reconcile_once
+from gpu_orchestrator.errors import ReconcileError
 from gpu_orchestrator.events import EventLog
 from gpu_orchestrator.models import Deployment, DeploymentState, VolumeInfo
 from gpu_orchestrator.providers.mock import MockProvider
@@ -27,7 +29,7 @@ def _runtime() -> VLLMRuntime:
     )
 
 
-def _deploy_once(tmp_path, provider, cfg) -> Deployment:
+def _deploy_once(tmp_path, provider, cfg, profile=_PROFILE) -> Deployment:
     store = Store(cfg.state_db)
     dep = Deployment(
         id="dep-v1",
@@ -35,13 +37,13 @@ def _deploy_once(tmp_path, provider, cfg) -> Deployment:
         provider="mock",
         desired_state=S.READY,
         observed_state=S.REQUESTED,
-        profile=_PROFILE,
+        profile=profile,
     )
     store.save_deployment(dep)
     ctx = {
         "provider": provider,
         "runtime": _runtime(),
-        "catalog": Catalog({"qwen3-0.6b": QWEN3_06B_SPEC}, {"qwen3-0.6b": _PROFILE}),
+        "catalog": Catalog({"qwen3-0.6b": QWEN3_06B_SPEC}, {"qwen3-0.6b": profile}),
         "config": cfg,
         "store": store,
         "events": EventLog(store),
@@ -109,3 +111,44 @@ async def test_orchestrator_list_and_delete_volume(tmp_path):
 
 def test_volume_monthly_cost():
     assert VolumeInfo(id="v", name="n", size_gb=100).estimated_monthly_usd == 7.0
+
+
+# --- GPU availability + cache DC auto-selection ---------------------------------------
+
+
+async def test_gpu_availability_filters_by_gpu():
+    provider = MockProvider(namespace="test")
+    rows = await provider.gpu_availability("RTX-A4000")
+    assert {r.data_center_id for r in rows} == {"MOCK-DC-1", "MOCK-DC-2"}
+    assert [r for r in rows if r.available][0].data_center_id == "MOCK-DC-1"
+    assert await provider.gpu_availability("no-such-gpu") == []
+
+
+async def test_orchestrator_availability_resolves_model(tmp_path):
+    orch = Orchestrator(
+        Config(namespace="test", state_db=tmp_path / "v.db"),
+        provider=MockProvider(namespace="test"),
+        runtime=_runtime(),
+    )
+    rows = await orch.gpu_availability(model_id="qwen3-0.6b", provider="mock")  # -> RTX-A4000
+    assert any(r.available for r in rows)
+
+
+async def test_cache_auto_selects_available_dc(tmp_path):
+    # No explicit DC: pick one that currently has the GPU (RTX-A4000 -> MOCK-DC-1).
+    provider = MockProvider(namespace="test")
+    cfg = Config(namespace="test", state_db=tmp_path / "v.db", cache_volume_enabled=True)
+    await _deploy_once(tmp_path, provider, cfg, profile=QWEN3_06B_PROFILE)  # recommends RTX-A4000
+    volumes = await provider.list_volumes()
+    assert len(volumes) == 1
+    assert volumes[0].data_center_id == "MOCK-DC-1"  # the available one
+
+
+async def test_cache_auto_select_fails_without_capacity(tmp_path):
+    # No explicit DC and the GPU is not available anywhere -> clear error, no volume, no pod.
+    provider = MockProvider(namespace="test")
+    cfg = Config(namespace="test", state_db=tmp_path / "v.db", cache_volume_enabled=True)
+    profile = QWEN3_06B_PROFILE.model_copy(update={"recommended_gpu": "A100-80GB"})
+    with pytest.raises(ReconcileError, match="no data center"):
+        await _deploy_once(tmp_path, provider, cfg, profile=profile)
+    assert await provider.list_volumes() == []
