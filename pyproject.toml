@@ -1,9 +1,19 @@
 [project]
-name = "gpu-orchestrator"
+name = "open-lease"
 version = "0.1.0"
 description = "Make GPU infrastructure programmable: provision GPUs, deploy open-source LLMs, serve OpenAI-compatible inference."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Fahad Baig" }]
+keywords = ["gpu", "llm", "vllm", "runpod", "inference", "orchestration"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
