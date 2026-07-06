@@ -12,7 +12,13 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Distributed Computing",
+    "Environment :: Console",
+    "Operating System :: POSIX",
+    "Typing :: Typed",
 ]
 # Base install = engine + CLI + the OpenAI proxy (`gpu proxy`, starlette/uvicorn). The heavier
 # server frameworks for the REST API and MCP server are optional extras.
@@ -25,6 +31,12 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
 ]
+
+[project.urls]
+Homepage = "https://openlease.canonicalresearch.dev"
+Documentation = "https://openlease.canonicalresearch.dev/docs"
+Repository = "https://github.com/mfbaig35r/open-lease"
+Issues = "https://github.com/mfbaig35r/open-lease/issues"
 
 [project.optional-dependencies]
 api = ["fastapi>=0.110"]        # `gpu serve` (REST API)

@@ -1,0 +1,45 @@
+name: Publish
+
+# A version tag publishes to PyPI, e.g.:  git tag v0.1.0 && git push origin v0.1.0
+# (tag-push, not a GitHub Release). Bump `version` in pyproject.toml to match the tag first.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: uv sync --extra dev
+      - name: Lint + format
+        run: |
+          uv run ruff check src/ tests/
+          uv run ruff format --check src/ tests/
+      - name: Test (offline, mock provider)
+        run: uv run python -m pytest tests/ -q
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Check metadata + README render for PyPI
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI Trusted Publishing (OIDC): no API token stored anywhere
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
