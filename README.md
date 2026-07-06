@@ -78,6 +78,8 @@ the authoritative spec.
 - [Architecture](docs/architecture.md) — the seams, the reconcile loop, cost-safety.
 - [Configuration](docs/configuration.md) — settings, precedence, credentials.
 - [Adding a provider](docs/adding-a-provider.md) — implement the Provider ABC against the contract.
+- [Phase 4 (Swamp extension)](docs/phase-4-swamp.md) — requirements for the front end that consumes
+  the REST API.
 
 ## What's not done
 
