@@ -10,8 +10,8 @@ driven by a reconcile loop comparing desired vs observed state, so interruption 
 are free, and the cost-safety invariant (no orphaned pods burning money) holds by construction.
 
 > Status: beta. The engine is validated against real RunPod (deploy, kill-and-recover, crash-resume,
-> orphan sweep, concurrent deploys). Not yet on PyPI, single provider, and a couple of the §18
-> gauntlet scenarios remain. See [What's not done](#whats-not-done).
+> orphan sweep, concurrent deploys, runtime-crash cap). Not yet on PyPI, single provider, and the
+> §18 24h soak remains. See [What's not done](#whats-not-done).
 
 ## Quickstart
 
@@ -85,8 +85,10 @@ the authoritative spec.
 
 - Not published to PyPI (install from source).
 - RunPod is the only real provider; the seam is proven but no second provider yet.
-- The catalog has a few models; not every entry is validated against real hardware.
-- Gauntlet §18: OOM/terminal-failed and the 24h soak are not yet run.
+- The catalog is small: qwen3-0.6b / qwen3-8b / qwen3-32b are validated on real hardware;
+  llama-3.1-8b is unvalidated (Meta gating, HF access pending).
+- Gauntlet §18: the 24h soak is not yet run. OOM/terminal-failed is closed (a runtime-crash
+  cap drives a persistently-failing deploy to terminal FAILED; covered by an offline test).
 - The warm-cache speedup is proven mechanically but its timing is capacity-pending.
 
 ## Development
@@ -98,7 +100,8 @@ uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/
 ```
 
 The `gpu` CLI and `gpu_orchestrator` import package keep their names for now; the distribution is
-`open-lease`. Build order and non-negotiable constraints are in [CLAUDE.md](CLAUDE.md).
+`open-lease`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup, architecture constraints,
+and how to add a provider; build order and non-negotiable rules are in [CLAUDE.md](CLAUDE.md).
 
 ## License
 

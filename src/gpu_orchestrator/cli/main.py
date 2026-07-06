@@ -30,8 +30,21 @@ _T = TypeVar("_T")
 _state = {"debug": False}
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from gpu_orchestrator import __version__
+
+        typer.echo(__version__)
+        raise typer.Exit()
+
+
 @app.callback()
-def _main(debug: bool = typer.Option(False, "--debug", help="Show tracebacks on error.")) -> None:
+def _main(
+    debug: bool = typer.Option(False, "--debug", help="Show tracebacks on error."),
+    version: bool = typer.Option(
+        False, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."
+    ),
+) -> None:
     _state["debug"] = debug
     configure_logging("DEBUG" if debug else "WARNING")
 
