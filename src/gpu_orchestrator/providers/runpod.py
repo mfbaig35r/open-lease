@@ -46,11 +46,25 @@ _GPU_TYPES = [
         provider_sku="NVIDIA RTX A4000",
     ),
     GPUType(
+        id="A40-48GB",
+        name="NVIDIA A40",
+        memory_gb=48,
+        hourly_usd=0.44,
+        provider_sku="NVIDIA A40",
+    ),
+    GPUType(
         id="A100-80GB",
         name="NVIDIA A100 80GB PCIe",
         memory_gb=80,
         hourly_usd=1.89,
         provider_sku="NVIDIA A100 80GB PCIe",
+    ),
+    GPUType(
+        id="H100-80GB",
+        name="NVIDIA H100 80GB HBM3",
+        memory_gb=80,
+        hourly_usd=2.99,
+        provider_sku="NVIDIA H100 80GB HBM3",
     ),
 ]
 
