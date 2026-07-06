@@ -31,10 +31,10 @@ startup_timeout_seconds = 300
 """
 
 
-def test_real_catalog_loads_three_models():
+def test_real_catalog_loads_models():
     catalog = load_catalog()
     ids = {m.id for m in catalog.list_models()}
-    assert ids == {"qwen3-0.6b", "llama-3.1-8b-instruct", "qwen3-32b"}
+    assert ids == {"qwen3-0.6b", "llama-3.1-8b-instruct", "qwen3-8b", "qwen3-32b"}
 
 
 def test_every_profile_carries_validation_metadata():

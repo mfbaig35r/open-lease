@@ -144,6 +144,50 @@ async def test_reconcile_retries_then_fails_on_persistent_create_error(tmp_path)
     assert len(failed) == 1
 
 
+async def test_reconcile_gives_up_on_persistent_runtime_crash(tmp_path):
+    # Gauntlet §18 #4 (offline): a pod that is created fine but whose runtime crashes before READY
+    # every time (an OOM loop) must reach FAILED, not recreate forever. The provider CREATE succeeds
+    # each cycle, so failure.attempts never accumulates -- runtime_failures does, and caps it.
+    provider = MockProvider(namespace="test")
+    ctx = _ctx(tmp_path, provider)
+    dep = _new_deployment()
+    ctx["store"].save_deployment(dep)
+
+    for _ in range(20):
+        dep = await reconcile_once(dep, **ctx)
+        if dep.observed_state == S.FAILED:
+            break
+        if dep.instance is not None:
+            provider.kill(dep.instance.provider_instance_id)  # runtime crashed -> the pod dies
+
+    assert dep.observed_state == S.FAILED
+    assert dep.runtime_failures >= 3  # config.retry_max_attempts
+    # Cost safety: no pod is left running.
+    assert not [i for i in await provider.list_instances() if i.state.upper() == "RUNNING"]
+    assert len(ctx["events"].query("dep-test01", kind=EventKind.DEPLOYMENT_FAILED)) == 1
+
+    # And it rests: a further tick does not resurrect it into a fresh pod.
+    dep = await reconcile_once(dep, **ctx)
+    assert dep.observed_state == S.FAILED
+    assert dep.instance is None
+
+
+async def test_reconcile_single_runtime_death_self_heals(tmp_path):
+    # A one-off death (under the cap) still recovers: the fix must not turn transient blips fatal.
+    provider = MockProvider(namespace="test")
+    ctx = _ctx(tmp_path, provider)
+    dep = _new_deployment()
+    ctx["store"].save_deployment(dep)
+    dep = await _drive(dep, ctx, until={S.READY, S.FAILED})
+    assert dep.observed_state == S.READY
+
+    provider.kill(dep.instance.provider_instance_id)  # a single crash
+    dep = await _drive(dep, ctx, until={S.READY, S.FAILED})
+
+    assert dep.observed_state == S.READY  # recreated and healthy again
+    assert dep.runtime_failures == 0  # reset once READY
+
+
 async def test_reconcile_stop_destroys_and_settles(tmp_path):
     provider = MockProvider(namespace="test")
     ctx = _ctx(tmp_path, provider)

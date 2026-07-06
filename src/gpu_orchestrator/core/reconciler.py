@@ -56,6 +56,17 @@ _log = get_logger("reconciler")
 _RUNNING = {"RUNNING"}
 _DEAD = {"EXITED", "TERMINATED", "TERMINATING", "DEAD", "FAILED"}
 
+# Deployment states that mean we have a live or coming-up pod. If observe drops from one of these to
+# REQUESTED (the pod is gone) while we still want it up, the runtime died unexpectedly (crash/OOM).
+_COMING_UP_OR_LIVE = {
+    DeploymentState.PROVISIONING,
+    DeploymentState.DOWNLOADING,
+    DeploymentState.BOOTING,
+    DeploymentState.STARTING,
+    DeploymentState.READY,
+    DeploymentState.DEGRADED,
+}
+
 
 # =====================================================================================
 # PURE decision core (no I/O, no clock) -- the most-tested code in the repo (spec §7.3)
@@ -107,6 +118,19 @@ def next_step(
     # User wants it stopped: tear the instance down. The cost-safety invariant lives here (§7.3).
     if desired == DeploymentState.STOPPED:
         return ReconcileAction.DESTROY_INSTANCE if has_instance else ReconcileAction.NONE
+
+    # Terminal: a runtime that keeps crashing after a successful create (e.g. an OOM loop). The pod
+    # is created fine each time, so ``failure`` above never accumulates; ``runtime_failures`` does.
+    # Give up rather than recreate forever. Destroy any pod we still hold first -- keyed on the held
+    # record, not ``has_instance``, so a dead-token (EXITED) pod is torn down too (§7.3).
+    if deployment.runtime_failures >= max_attempts:
+        if deployment.instance is not None:
+            return ReconcileAction.DESTROY_INSTANCE
+        return (
+            ReconcileAction.MARK_FAILED
+            if deployment.observed_state != DeploymentState.FAILED
+            else ReconcileAction.NONE
+        )
 
     # A retryable failure that has budget left: clear any partial instance first, then retry.
     if failure is not None and failure.retryable:
@@ -357,7 +381,16 @@ async def reconcile_once(
         )
 
     observed = obs.observed_state
+    _count_runtime_death(deployment, observed, events)
     _release_download_lock_if_done(deployment, config, store)
+    # A terminally FAILED deployment with no live pod rests: do not churn it back to REQUESTED every
+    # tick (the daemon keeps re-ticking non-stopped records). A stop request still settles below.
+    if (
+        deployment.observed_state == DeploymentState.FAILED
+        and observed == DeploymentState.REQUESTED
+        and deployment.desired_state != DeploymentState.STOPPED
+    ):
+        return deployment
     outcomes.apply_stage_budget(deployment, observed, config, now)
 
     # Steady state: already where we want to be, nothing pending. Do not churn the store.
@@ -416,6 +449,30 @@ def _release_download_lock_if_done(deployment: Deployment, config: Config, store
         DeploymentState.STOPPED,
     ):
         store.release_download_lock(deployment.model_id, deployment.id)
+
+
+def _count_runtime_death(
+    deployment: Deployment, observed: DeploymentState, events: EventLog
+) -> None:
+    """Track pods that die unexpectedly after being created. Reaching READY resets the count; a
+    coming-up/live pod dropping to REQUESTED (gone) while we still want it up is a runtime crash and
+    counts toward the give-up cap in ``next_step``. Needed because the provider CREATE succeeds each
+    time an OOM pod is recreated, so ``failure.attempts`` never accumulates (cost-safety §7.3)."""
+    if observed == DeploymentState.READY:
+        deployment.runtime_failures = 0
+        return
+    if (
+        observed == DeploymentState.REQUESTED
+        and deployment.observed_state in _COMING_UP_OR_LIVE
+        and deployment.desired_state != DeploymentState.STOPPED
+    ):
+        deployment.runtime_failures += 1
+        outcomes.emit(
+            events,
+            deployment,
+            EventKind.RECONCILE_ACTION,
+            {"action": "runtime_death", "runtime_failures": deployment.runtime_failures},
+        )
 
 
 def _record_and_emit_failure(

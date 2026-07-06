@@ -126,6 +126,20 @@ async def test_gpu_availability_filters_by_gpu():
     assert await provider.gpu_availability("no-such-gpu") == []
 
 
+async def test_gpu_availability_honours_gpu_override(tmp_path):
+    # A --gpu override (catalog id) is resolved to its SKU and wins over the model's GPU, so the
+    # deploy preflight checks the GPU the deploy will actually use (regression: it used to always
+    # check the recommended GPU and ignore --gpu).
+    provider = MockProvider(namespace="test")
+    orch = Orchestrator(
+        Config(namespace="test", state_db=tmp_path / "a.db"),
+        provider=provider,
+        runtime=_runtime(),
+    )
+    rows = await orch.gpu_availability(model_id="qwen3-0.6b", gpu_type="RTX-A4000", provider="mock")
+    assert {r.data_center_id for r in rows} == {"MOCK-DC-1", "MOCK-DC-2"}
+
+
 async def test_orchestrator_availability_resolves_model(tmp_path):
     orch = Orchestrator(
         Config(namespace="test", state_db=tmp_path / "v.db"),

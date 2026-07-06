@@ -55,7 +55,37 @@ validated_provider = "runpod"
 validated_gpu = "A100-80GB"
 validated_image = "vllm/vllm-openai:v0.9.1"
 startup_timeout_seconds = 1200
-notes = "UNVALIDATED: meta-llama is HF-gated (needs license acceptance); never deployed. Validate or remove before v1.0. Context capped to 32k to fit KV cache on one A100."
+notes = "UNVALIDATED: gated. Access requested 2026-07-06, PENDING Meta approval (the gated repo returns 403 for the current HF token). Validate on grant. Qwen3-8B is the validated non-gated mid-size in the meantime. Context capped to 32k to fit KV cache on one A100."
+
+[models.qwen3-8b]
+id = "qwen3-8b"
+hf_repo = "Qwen/Qwen3-8B"
+family = "qwen3"
+parameter_count = "8B"
+min_gpu_memory_gb = 24
+context_window = 32768
+license = "apache-2.0"
+chat = true
+supports_tools = true
+supports_reasoning = true
+
+[models.qwen3-8b.profile]
+image = "vllm/vllm-openai:v0.9.1"
+tensor_parallel = 1
+gpu_memory_utilization = 0.90
+recommended_gpu = "A40-48GB"
+min_disk_gb = 50
+
+[models.qwen3-8b.profile.launch_args]
+"--max-model-len" = "32768"
+
+[models.qwen3-8b.profile.validation]
+validated_at = "2026-07-06"
+validated_provider = "runpod"
+validated_gpu = "H100-80GB"
+validated_image = "vllm/vllm-openai:v0.9.1"
+startup_timeout_seconds = 900
+notes = "Validated live: deployed to READY (~5m cold), served a valid completion through the proxy, torn down clean. Ran on H100-80GB because A40 was out of stock at validation time; recommended_gpu stays A40-48GB for cost (an 8B serves on any 24GB+ GPU). Non-gated swap for the gated llama-3.1-8b slot."
 
 [models.qwen3-32b]
 id = "qwen3-32b"

@@ -186,11 +186,14 @@ class Orchestrator:
     async def gpu_availability(
         self, *, model_id: str | None = None, gpu_type: str | None = None, provider: str = "runpod"
     ) -> list[GpuAvailability]:
-        """Per-data-center GPU availability. Pass ``model_id`` to resolve to that model's GPU."""
-        if model_id and not gpu_type:
-            profile = self._catalog.get_profile(model_id)
+        """Per-data-center GPU availability. Pass ``model_id`` to resolve to that model's GPU, or
+        ``gpu_type`` (a catalog id or provider SKU) to check a specific GPU; ``gpu_type`` wins when
+        both are given, matching a ``--gpu`` deploy override."""
+        if gpu_type is None and model_id:
+            gpu_type = self._catalog.get_profile(model_id).recommended_gpu
+        if gpu_type is not None:
             caps = await self._provider(provider).capabilities()
-            gpu_type = _match_gpu(caps.gpu_types, profile.recommended_gpu).provider_sku
+            gpu_type = _match_gpu(caps.gpu_types, gpu_type).provider_sku
         return await self._provider(provider).gpu_availability(gpu_type)
 
     async def delete_volume(self, volume_id: str, *, provider: str = "runpod") -> None:

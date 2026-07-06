@@ -42,11 +42,25 @@ _CATALOG_PARITY = [
         provider_sku="RTX-A4000",
     ),
     GPUType(
+        id="A40-48GB",
+        name="Mock A40",
+        memory_gb=48,
+        hourly_usd=0.44,
+        provider_sku="A40-48GB",
+    ),
+    GPUType(
         id="A100-80GB",
         name="Mock A100 80GB",
         memory_gb=80,
         hourly_usd=1.89,
         provider_sku="A100-80GB",
+    ),
+    GPUType(
+        id="H100-80GB",
+        name="Mock H100 80GB",
+        memory_gb=80,
+        hourly_usd=2.99,
+        provider_sku="H100-80GB",
     ),
 ]
 
