@@ -295,6 +295,12 @@ class Deployment(BaseModel):
     download_progress: float | None = None
     state_history: list[StateTransition] = Field(default_factory=list)
     failure: FailureInfo | None = None
+    # Count of unexpected runtime deaths (a created pod that vanished before reaching READY, e.g. an
+    # OOM crash loop) since the last healthy READY. Distinct from ``failure.attempts``, which counts
+    # only provider CREATE errors: a successful create clears ``failure`` next tick, so it can never
+    # cap a runtime that keeps crashing after coming up. This survives that reset and trips
+    # next_step to terminal FAILED at ``retry_max_attempts`` (cost-safety, spec §7.3).
+    runtime_failures: int = 0
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

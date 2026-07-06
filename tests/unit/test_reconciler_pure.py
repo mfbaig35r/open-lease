@@ -145,6 +145,42 @@ def test_next_step_terminal_failure_destroys_lingering_instance():
     assert next_step(dep, S.READY) == A.DESTROY_INSTANCE
 
 
+# --- next_step: runtime crash loop (gauntlet §18 #4) ----------------------------------
+
+
+def test_next_step_runtime_crash_loop_marks_failed():
+    # A pod created fine but crashing before READY every time (OOM loop): once the crash count hits
+    # the cap and no pod is held, give up instead of recreating forever.
+    dep = _dep(S.READY, S.STARTING)
+    dep.instance = None
+    dep.runtime_failures = 3
+    assert next_step(dep, S.REQUESTED, max_attempts=3) == A.MARK_FAILED
+
+
+def test_next_step_runtime_crash_loop_destroys_held_pod_first():
+    # Cost safety: a pod still held when the crash cap trips is torn down first, even a dead one.
+    dep = _dep(S.READY, S.STARTING)
+    dep.instance = _instance("EXITED")
+    dep.runtime_failures = 3
+    assert next_step(dep, S.REQUESTED, max_attempts=3) == A.DESTROY_INSTANCE
+
+
+def test_next_step_runtime_failures_below_cap_recreates():
+    # Under the cap, a vanished pod is still recreated -- transient single deaths self-heal.
+    dep = _dep(S.READY, S.STARTING)
+    dep.instance = None
+    dep.runtime_failures = 2
+    assert next_step(dep, S.REQUESTED, max_attempts=3) == A.CREATE_INSTANCE
+
+
+def test_next_step_runtime_failed_terminal_rests():
+    # Once terminally failed with no pod, rest -- do not oscillate on daemon re-ticks.
+    dep = _dep(S.READY, S.FAILED)
+    dep.instance = None
+    dep.runtime_failures = 3
+    assert next_step(dep, S.REQUESTED, max_attempts=3) == A.NONE
+
+
 def test_next_step_terminal_failure_without_instance_marks_failed():
     dep = _dep(S.READY, S.STARTING, _fail(False, 1))
     assert next_step(dep, S.REQUESTED) == A.MARK_FAILED
