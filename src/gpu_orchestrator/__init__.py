@@ -1,10 +1,13 @@
 """gpu_orchestrator public API.
 
-Phase 1 build in progress. The ``Orchestrator`` facade is added at build step 5; for now this
-exposes the contract (domain models, errors, config) so downstream steps import from one place.
+Exposes the contract (domain models, errors, config) from one place. The ``Orchestrator`` facade
+and the Provider/Runtime seams live in ``gpu_orchestrator.core`` / ``.providers`` / ``.runtimes``;
+import them from there so a models-only consumer does not pull in the whole engine.
 """
 
 from __future__ import annotations
+
+from importlib.metadata import PackageNotFoundError, version
 
 from . import errors
 from .config import Config
@@ -34,7 +37,13 @@ from .models import (
     VolumeSpec,
 )
 
+try:
+    __version__ = version("open-lease")
+except PackageNotFoundError:  # running from a source tree that was never installed
+    __version__ = "0.0.0+source"
+
 __all__ = [
+    "__version__",
     "Config",
     "errors",
     # enums
