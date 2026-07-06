@@ -77,16 +77,20 @@ def _orchestrator() -> Orchestrator:
     return Orchestrator(_config())
 
 
-def _preflight_capacity(orch: Orchestrator, model: str, provider: str) -> None:
-    """Best-effort: warn if no data center currently has capacity for the model's GPU, so the user
-    is not left wondering why a deploy retries and fails. Never blocks the deploy."""
+def _preflight_capacity(
+    orch: Orchestrator, model: str, provider: str, gpu: str | None = None
+) -> None:
+    """Best-effort: warn if no data center currently has capacity for the GPU this deploy will use,
+    so the user is not left wondering why it retries and fails. Honours a ``--gpu`` override rather
+    than always checking the model's recommended GPU. Never blocks the deploy."""
     try:
-        rows = asyncio.run(orch.gpu_availability(model_id=model, provider=provider))
+        rows = asyncio.run(orch.gpu_availability(model_id=model, gpu_type=gpu, provider=provider))
     except OrchestratorError:
         return  # unknown model / unsupported provider / probe failed: let deploy handle it
     if rows and not any(r.available for r in rows):
+        which = gpu if gpu else f"{model}'s GPU"
         render.warn(
-            f"no data center currently has capacity for {model}'s GPU; the deploy may wait or fail",
+            f"no data center currently has capacity for {which}; the deploy may wait or fail",
             hint="check `gpu availability " + model + "`",
         )
 
@@ -119,7 +123,7 @@ def deploy(
 ) -> None:
     """Deploy a model. Returns immediately unless --wait (or --chat, which implies it)."""
     orch = _orchestrator()
-    _preflight_capacity(orch, model, provider)
+    _preflight_capacity(orch, model, provider, gpu)
     wait = wait or chat  # can't chat until it is READY
     dep = _run(
         orch.deploy_model(model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_))
