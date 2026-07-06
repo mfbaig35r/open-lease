@@ -19,12 +19,11 @@ The base install is the engine, CLI, and the OpenAI proxy. The REST API and MCP 
 extras (`open-lease[api]`, `open-lease[mcp]`, or `open-lease[all]`) so the core stays lean.
 
 ```bash
-# install from source (not on PyPI yet)
-git clone https://github.com/mfbaig35r/open-lease && cd open-lease
-uv sync                    # base: CLI + proxy. Add: --extra all  (REST API + MCP)
+pip install open-lease                      # base: CLI + OpenAI proxy
+# add the REST API and MCP server:  pip install 'open-lease[all]'
 
 # credentials (see docs/configuration.md)
-cp .env.example .env      # then set RUNPOD_API_KEY (and optionally HF_TOKEN)
+export RUNPOD_API_KEY=...                    # and HF_TOKEN for gated models; or use a .env
 
 gpu models                                  # the model catalog
 gpu availability qwen3-0.6b                 # which data centers can run it right now
@@ -83,7 +82,6 @@ the authoritative spec.
 
 ## What's not done
 
-- Not published to PyPI (install from source).
 - RunPod is the only real provider; the seam is proven but no second provider yet.
 - The catalog is small: qwen3-0.6b / qwen3-8b / qwen3-32b are validated on real hardware;
   llama-3.1-8b is unvalidated (Meta gating, HF access pending).
