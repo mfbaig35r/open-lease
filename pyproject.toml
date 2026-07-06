@@ -14,6 +14,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# Base install = engine + CLI + the OpenAI proxy (`gpu proxy`, starlette/uvicorn). The heavier
+# server frameworks for the REST API and MCP server are optional extras.
 dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
@@ -21,13 +23,14 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "starlette>=0.37",
-    "fastapi>=0.110",
-    "fastmcp>=2.0",
     "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+api = ["fastapi>=0.110"]        # `gpu serve` (REST API)
+mcp = ["fastmcp>=2.0"]          # `gpu-mcp` (MCP server)
+all = ["fastapi>=0.110", "fastmcp>=2.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "fastapi>=0.110", "fastmcp>=2.0"]
 
 [project.scripts]
 gpu = "gpu_orchestrator.cli.main:app"

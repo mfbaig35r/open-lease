@@ -15,10 +15,13 @@ are free, and the cost-safety invariant (no orphaned pods burning money) holds b
 
 ## Quickstart
 
+The base install is the engine, CLI, and the OpenAI proxy. The REST API and MCP server are optional
+extras (`open-lease[api]`, `open-lease[mcp]`, or `open-lease[all]`) so the core stays lean.
+
 ```bash
 # install from source (not on PyPI yet)
 git clone https://github.com/mfbaig35r/open-lease && cd open-lease
-uv sync
+uv sync                    # base: CLI + proxy. Add: --extra all  (REST API + MCP)
 
 # credentials (see docs/configuration.md)
 cp .env.example .env      # then set RUNPOD_API_KEY (and optionally HF_TOKEN)

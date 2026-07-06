@@ -405,7 +405,10 @@ def serve(
     """Start the REST API (management routes + the OpenAI proxy at /v1/*)."""
     import uvicorn
 
-    from ..api import create_app
+    try:
+        from ..api import create_app
+    except ImportError:
+        _fail_msg("the REST API needs the 'api' extra: pip install 'open-lease[api]'")
 
     cfg = _config()
     host = host or cfg.api_host
@@ -420,7 +423,10 @@ def serve(
 @app.command()
 def mcp() -> None:
     """Run the MCP server (agent-facing tools over the Orchestrator) on stdio."""
-    from ..mcp.server import create_server
+    try:
+        from ..mcp.server import create_server
+    except ImportError:
+        _fail_msg("the MCP server needs the 'mcp' extra: pip install 'open-lease[mcp]'")
 
     create_server(_orchestrator()).run()
 

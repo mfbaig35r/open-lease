@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from ..models import (
@@ -39,15 +40,16 @@ _STATE_COLOR = {
 
 
 def error(message: str, hint: str | None = None) -> None:
-    _err.print(f"[red]Error:[/red] {message}")
+    # escape: the message is data, not markup, so brackets (open-lease[api]) render literally.
+    _err.print(f"[red]Error:[/red] {escape(message)}")
     if hint:
-        _err.print(f"[dim]hint:[/dim] {hint}")
+        _err.print(f"[dim]hint:[/dim] {escape(hint)}")
 
 
 def warn(message: str, hint: str | None = None) -> None:
-    _err.print(f"[yellow]warning:[/yellow] {message}")
+    _err.print(f"[yellow]warning:[/yellow] {escape(message)}")
     if hint:
-        _err.print(f"[dim]hint:[/dim] {hint}")
+        _err.print(f"[dim]hint:[/dim] {escape(hint)}")
 
 
 def emit_json(payload: object) -> None:
