@@ -86,7 +86,7 @@ def _route_table(orchestrator: Orchestrator) -> dict[str, tuple[str, str, str]]:
     for d in orchestrator.list_deployments():
         if d.observed_state.value != "ready" or not d.endpoint_url:
             continue
-        served = hf_repo.get(d.model_id, d.model_id)
+        served = d.hf_repo or hf_repo.get(d.model_id, d.model_id)
         table[d.model_id] = (d.id, d.endpoint_url, served)
         table[served] = (d.id, d.endpoint_url, served)
     return table

@@ -53,6 +53,35 @@ def test_deploy_wait_reaches_ready(cli):
     assert "ready" in result.output
 
 
+def test_deploy_hf_repo_requires_gpu(cli):
+    runner, _ = cli
+    result = runner.invoke(app, ["deploy", "--hf-repo", "Qwen/Qwen3-14B", "--provider", "mock"])
+    assert result.exit_code != 0
+    assert "--gpu" in result.output
+
+
+def test_deploy_adhoc_hf_repo_reaches_ready(cli):
+    runner, orch = cli
+    result = runner.invoke(
+        app,
+        [
+            "deploy",
+            "--hf-repo",
+            "Qwen/Qwen3-14B",
+            "--gpu",
+            "MOCK-GPU",
+            "--provider",
+            "mock",
+            "--wait",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "ready" in result.output
+    dep = orch.list_deployments()[0]
+    assert dep.hf_repo == "Qwen/Qwen3-14B"
+    assert dep.model_id == "qwen3-14b"  # no catalog entry needed
+
+
 def test_status_lists_deployment(cli):
     runner, orch = cli
     runner.invoke(app, ["deploy", "qwen3-0.6b", "--provider", "mock", "--wait"])

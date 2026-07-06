@@ -285,6 +285,11 @@ class Deployment(BaseModel):
     id: str  # short, human-friendly: "dep-a1b2c3"
     model_id: str
     provider: str
+    # hf_repo + context_window make a deployment self-contained: reconcile and the proxy can build
+    # and route it without a catalog lookup, which lets an ad-hoc `--hf-repo` deploy run with no
+    # catalog entry. Empty on records created before this existed; the catalog is the fallback.
+    hf_repo: str = ""
+    context_window: int = 0
     desired_state: DeploymentState
     observed_state: DeploymentState
     profile: RuntimeProfile

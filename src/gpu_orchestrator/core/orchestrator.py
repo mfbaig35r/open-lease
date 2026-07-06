@@ -35,6 +35,7 @@ from ..models import (
     ProviderInfo,
     RuntimeOverrides,
     RuntimeProfile,
+    ValidationMetadata,
     VolumeInfo,
 )
 from ..providers.base import PROVIDERS, Provider
@@ -53,6 +54,11 @@ _MAX_DRIVE_TICKS = 200
 
 _TERMINAL_READY = {DeploymentState.READY, DeploymentState.FAILED}
 _TERMINAL_STOP = {DeploymentState.STOPPED, DeploymentState.FAILED}
+
+# Defaults for an ad-hoc (--hf-repo) deploy that has no catalog recipe.
+_ADHOC_IMAGE = "vllm/vllm-openai:v0.9.1"
+_ADHOC_DISK_GB = 60
+_ADHOC_STARTUP_SECONDS = 1800  # generous: an unknown model may be large / slow to download
 
 
 class Orchestrator:
@@ -91,19 +97,83 @@ class Orchestrator:
         wait: bool = False,
         overrides: RuntimeOverrides | None = None,
     ) -> Deployment:
-        spec = self._catalog.get_spec(model_id)  # raises ModelNotFoundError if unknown
+        """Deploy a catalog model by id (raises ModelNotFoundError if unknown)."""
+        spec = self._catalog.get_spec(model_id)
         profile = _apply_overrides(self._catalog.get_profile(model_id), gpu, overrides)
-        deployment = Deployment(
-            id=_new_deployment_id(),
+        return await self._launch(
             model_id=spec.id,
             provider=provider,
+            profile=profile,
+            hf_repo=spec.hf_repo,
+            context_window=spec.context_window,
+            wait=wait,
+        )
+
+    async def deploy_adhoc(
+        self,
+        *,
+        hf_repo: str,
+        gpu: str,
+        provider: str = "runpod",
+        context_window: int = 0,
+        image: str | None = None,
+        disk_gb: int | None = None,
+        wait: bool = False,
+        overrides: RuntimeOverrides | None = None,
+    ) -> Deployment:
+        """Deploy any vLLM-servable HF repo with no catalog entry. The engine is model-neutral; the
+        catalog only supplies tuned recipes. ``--gpu`` is required (no recommended GPU to fall back
+        on); ``context_window`` 0 lets vLLM auto-detect. The deployment carries its own hf_repo, so
+        reconcile and the proxy need no catalog lookup."""
+        img = image or _ADHOC_IMAGE
+        profile = RuntimeProfile(
+            model_id=_adhoc_model_id(hf_repo),
+            image=img,
+            recommended_gpu=gpu,
+            min_disk_gb=disk_gb or _ADHOC_DISK_GB,
+            validation=ValidationMetadata(
+                validated_at="",
+                validated_provider=provider,
+                validated_gpu=gpu,
+                validated_image=img,
+                startup_timeout_seconds=_ADHOC_STARTUP_SECONDS,
+                notes="ad-hoc --hf-repo deploy (no catalog entry)",
+            ),
+        )
+        profile = _apply_overrides(profile, None, overrides)  # fold in --set launch_args
+        return await self._launch(
+            model_id=profile.model_id,
+            provider=provider,
+            profile=profile,
+            hf_repo=hf_repo,
+            context_window=context_window,
+            wait=wait,
+        )
+
+    async def _launch(
+        self,
+        *,
+        model_id: str,
+        provider: str,
+        profile: RuntimeProfile,
+        hf_repo: str,
+        context_window: int,
+        wait: bool,
+    ) -> Deployment:
+        """Shared tail of deploy_model / deploy_adhoc: create the record, persist, emit, drive."""
+        deployment = Deployment(
+            id=_new_deployment_id(),
+            model_id=model_id,
+            provider=provider,
+            hf_repo=hf_repo,
+            context_window=context_window,
             desired_state=DeploymentState.READY,
             observed_state=DeploymentState.REQUESTED,
             profile=profile,
         )
         with correlation_context(deployment.id):
             self._store.save_deployment(deployment)
-            self._emit(deployment, EventKind.DEPLOYMENT_REQUESTED, {"model_id": spec.id})
+            self._emit(deployment, EventKind.DEPLOYMENT_REQUESTED, {"model_id": model_id})
             if wait:
                 deployment = await self._drive(deployment, _TERMINAL_READY)
         return deployment
@@ -269,6 +339,12 @@ class Orchestrator:
 
 def _new_deployment_id() -> str:
     return f"dep-{uuid4().hex[:6]}"
+
+
+def _adhoc_model_id(hf_repo: str) -> str:
+    """A display/routing id for an ad-hoc model, from the repo's last segment: Qwen/Qwen3-14B ->
+    qwen3-14b. The deployment stores the full hf_repo separately; the proxy routes by both."""
+    return hf_repo.rsplit("/", 1)[-1].lower()
 
 
 def _apply_overrides(
