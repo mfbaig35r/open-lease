@@ -176,6 +176,17 @@ volume shipped (opt-in shared network volume; `gpu volumes`), with **GPU availab
 RunPod GraphQL (`gpu availability`, deploy pre-flight warning, cache DC auto-selection) to soften the
 region-pinning tradeoff. Cache mechanism proven live; warm speedup pending capacity.
 
+## MCP server (Phase 3, shipped 2026-07-05)
+
+`mcp/server.py` is a FastMCP server: `create_server(orchestrator)` exposing 14 agent-facing tools,
+each a thin wrapper over one Orchestrator method (deploy/stop/restart/delete_deployment,
+list_models, list_deployments, get_deployment, deployment_logs, deployment_health, provider_status,
+gpu_availability, estimate_cost, get_costs, chat_completion). Tools return `model_dump(mode="json")`
+dicts; `delete_deployment` requires `confirm=true` (destructive). `chat_completion` reuses the
+proxy's `_route_table` for model-name routing. Runs over stdio via the `gpu-mcp` entry point or
+`gpu mcp`. Tested with FastMCP's in-memory `Client` against a mock-backed core. Same core, agent
+shape.
+
 ## REST API (Phase 2, shipped 2026-07-05)
 
 `api/app.py` is a thin FastAPI layer: `create_app(orchestrator)` with routes mirroring the

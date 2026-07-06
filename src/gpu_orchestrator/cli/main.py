@@ -418,6 +418,14 @@ def serve(
 
 
 @app.command()
+def mcp() -> None:
+    """Run the MCP server (agent-facing tools over the Orchestrator) on stdio."""
+    from ..mcp.server import create_server
+
+    create_server(_orchestrator()).run()
+
+
+@app.command()
 def chat(deployment_id: str) -> None:
     """Minimal REPL against a READY deployment (a thin httpx loop, not through the proxy)."""
     orch = _orchestrator()
