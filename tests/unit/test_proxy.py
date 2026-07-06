@@ -92,6 +92,37 @@ def test_routes_by_hf_repo(tmp_path):
     assert resp.headers["x-gpu-orch-deployment-id"] == "dep-p1"
 
 
+def test_routes_adhoc_model_by_its_own_hf_repo(tmp_path):
+    # An ad-hoc deployment (model_id NOT in the catalog) is routed by both its derived id and its
+    # stored hf_repo, without the proxy consulting the catalog for the served model.
+    store = Store(tmp_path / "proxy.db")
+    store.save_deployment(
+        Deployment(
+            id="dep-adhoc",
+            model_id="qwen3-14b",
+            hf_repo="Qwen/Qwen3-14B",
+            provider="mock",
+            desired_state=DeploymentState.READY,
+            observed_state=DeploymentState.READY,
+            profile=QWEN3_06B_PROFILE,
+            instance=Instance(
+                provider_instance_id="pod-a", provider="mock", gpu_type="X", state="RUNNING"
+            ),
+            endpoint_url=_ENDPOINT,
+        )
+    )
+    client = TestClient(
+        create_proxy_app(
+            Orchestrator(Config(namespace="test", state_db=tmp_path / "proxy.db")),
+            transport=_upstream(),
+        )
+    )
+    for name in ("qwen3-14b", "Qwen/Qwen3-14B"):
+        resp = client.post("/v1/chat/completions", json={"model": name, "messages": []})
+        assert resp.status_code == 200
+        assert resp.headers["x-gpu-orch-deployment-id"] == "dep-adhoc"
+
+
 def test_rewrites_model_to_served_id(tmp_path):
     # The client sends our catalog id; vLLM only knows the HF repo, so the proxy must rewrite the
     # model field before forwarding (found live: byte-for-byte + catalog-id routing 404s at vLLM).

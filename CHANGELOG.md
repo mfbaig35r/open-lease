@@ -6,6 +6,14 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Ad-hoc model deploys: `gpu deploy --hf-repo <repo> --gpu <gpu>` (and the `deploy_hf_model` MCP
+  tool) run any vLLM-servable Hugging Face model with no catalog entry. `--context` / `--image` /
+  `--disk` tune the profile; the catalog now supplies curated recipes rather than gating what can
+  run. Deployments are self-contained (they carry their own `hf_repo` and `context_window`), so
+  reconcile and the OpenAI proxy no longer need a catalog lookup. `gpu --version` and the deploy
+  preflight honoring `--gpu` also landed.
+
 ## [0.1.0] - 2026-07-06
 
 Initial public release: the orchestration core plus three interfaces over it.

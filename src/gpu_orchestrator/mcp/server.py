@@ -21,9 +21,22 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
     async def deploy_model(
         model_id: str, provider: str = "runpod", gpu: str | None = None, wait: bool = False
     ) -> dict:
-        """Deploy an open LLM on a GPU. Returns the deployment record. With wait=false it returns
-        immediately (a daemon must reconcile it); with wait=true it blocks until READY or FAILED."""
+        """Deploy a catalog model by id (see list_models). Returns the deployment record. With
+        wait=false it returns immediately (a daemon must reconcile it); wait=true blocks until READY
+        or FAILED. To deploy a model not in the catalog, use deploy_hf_model."""
         dep = await orchestrator.deploy_model(model_id, provider=provider, gpu=gpu, wait=wait)
+        return dep.model_dump(mode="json")
+
+    @mcp.tool
+    async def deploy_hf_model(
+        hf_repo: str, gpu: str, provider: str = "runpod", context: int = 0, wait: bool = False
+    ) -> dict:
+        """Deploy ANY vLLM-servable Hugging Face repo with no catalog entry (e.g.
+        hf_repo="Qwen/Qwen3-14B"). The engine is model-neutral. gpu is required (an ad-hoc model has
+        no recommended GPU); context=0 lets vLLM auto-detect max length. Returns the deployment."""
+        dep = await orchestrator.deploy_adhoc(
+            hf_repo=hf_repo, gpu=gpu, provider=provider, context_window=context, wait=wait
+        )
         return dep.model_dump(mode="json")
 
     @mcp.tool

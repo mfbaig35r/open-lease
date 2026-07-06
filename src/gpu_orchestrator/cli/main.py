@@ -126,21 +126,54 @@ def _overrides(sets: list[str] | None) -> RuntimeOverrides | None:
 
 @app.command()
 def deploy(
-    model: str,
+    model: str | None = typer.Argument(None, help="Catalog model id. Omit when using --hf-repo."),
+    hf_repo: str | None = typer.Option(
+        None, "--hf-repo", help="Deploy any HF repo with no catalog entry (needs --gpu)."
+    ),
     provider: str = typer.Option("runpod", "--provider"),
-    gpu: str | None = typer.Option(None, "--gpu", help="Override the profile's recommended GPU."),
+    gpu: str | None = typer.Option(
+        None, "--gpu", help="Override the recommended GPU (required with --hf-repo)."
+    ),
+    context: int | None = typer.Option(
+        None, "--context", help="Ad-hoc: max model length; default lets vLLM auto-detect."
+    ),
+    image: str | None = typer.Option(None, "--image", help="Ad-hoc: vLLM image."),
+    disk: int | None = typer.Option(None, "--disk", help="Ad-hoc: container disk GB."),
     wait: bool = typer.Option(False, "--wait", help="Block until READY or FAILED."),
     chat: bool = typer.Option(False, "--chat", help="Wait for READY, then open a chat REPL."),
     set_: list[str] | None = typer.Option(None, "--set", help="Override key=value (repeatable)."),
     auto_daemon: bool = typer.Option(False, "--auto-daemon", help="Start a daemon if none is up."),
 ) -> None:
-    """Deploy a model. Returns immediately unless --wait (or --chat, which implies it)."""
+    """Deploy a catalog model by id, or any HF repo with --hf-repo. The engine is model-neutral;
+    the catalog only holds tuned, validated recipes. Returns immediately unless --wait/--chat."""
     orch = _orchestrator()
-    _preflight_capacity(orch, model, provider, gpu)
     wait = wait or chat  # can't chat until it is READY
-    dep = _run(
-        orch.deploy_model(model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_))
-    )
+    if hf_repo and not gpu:
+        _fail_msg("--hf-repo requires --gpu (an ad-hoc model has no recommended GPU).")
+    if not hf_repo and not model:
+        _fail_msg("provide a catalog model id (see `gpu models`), or --hf-repo <repo> --gpu <gpu>.")
+
+    if hf_repo:
+        _preflight_capacity(orch, hf_repo, provider, gpu)
+        dep = _run(
+            orch.deploy_adhoc(
+                hf_repo=hf_repo,
+                gpu=gpu,
+                provider=provider,
+                context_window=context or 0,
+                image=image,
+                disk_gb=disk,
+                wait=wait,
+                overrides=_overrides(set_),
+            )
+        )
+    else:
+        _preflight_capacity(orch, model, provider, gpu)
+        dep = _run(
+            orch.deploy_model(
+                model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_)
+            )
+        )
     render.console.print(f"Deployment [b]{dep.id}[/b] -> {dep.observed_state.value}")
     if chat:
         if dep.observed_state.value != "ready":

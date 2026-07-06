@@ -45,6 +45,15 @@ def test_profile_launch_args_override_defaults():
     assert _pairs(req.command)["--max-model-len"] == "8192"
 
 
+def test_zero_context_window_omits_max_model_len():
+    # An ad-hoc deploy with no --context (context_window=0) lets vLLM auto-detect the max length.
+    rt = VLLMRuntime()
+    spec = QWEN3_06B_SPEC.model_copy(update={"context_window": 0})
+    profile = QWEN3_06B_PROFILE.model_copy(update={"launch_args": {}})
+    req = rt.build_instance_request(spec, profile, _GPU, name="n")
+    assert "--max-model-len" not in _pairs(req.command)
+
+
 def test_download_progress_parses_and_returns_none():
     rt = VLLMRuntime()
     assert rt.download_progress(["Downloading model.safetensors: 45%|### | 1.2G/2.6G"]) == 0.45

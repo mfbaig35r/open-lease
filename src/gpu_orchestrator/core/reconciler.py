@@ -38,6 +38,7 @@ from ..models import (
     HealthStatus,
     Instance,
     InstanceRequest,
+    ModelSpec,
     ReconcileAction,
     _utcnow,
 )
@@ -251,6 +252,24 @@ async def execute(
         deployment.endpoint_url = obs.endpoint_url
 
 
+def _resolve_spec(deployment: Deployment, catalog: Catalog) -> ModelSpec:
+    """The model spec used to build the instance. A self-contained deployment carries its own
+    ``hf_repo`` (an ad-hoc ``--hf-repo`` deploy, or any deploy that recorded it), so it needs no
+    catalog entry; the runtime only reads ``hf_repo`` and ``context_window``. Older records with no
+    ``hf_repo`` fall back to the catalog by ``model_id``."""
+    if deployment.hf_repo:
+        return ModelSpec(
+            id=deployment.model_id,
+            hf_repo=deployment.hf_repo,
+            family="adhoc",
+            parameter_count="?",
+            min_gpu_memory_gb=0,
+            context_window=deployment.context_window,
+            license="unknown",
+        )
+    return catalog.get_spec(deployment.model_id)
+
+
 async def _create_instance(
     deployment: Deployment,
     provider: Provider,
@@ -260,7 +279,7 @@ async def _create_instance(
     store: Store,
     now: datetime,
 ) -> None:
-    spec = catalog.get_spec(deployment.model_id)
+    spec = _resolve_spec(deployment, catalog)
     profile = deployment.profile
     gpu = await _resolve_gpu(provider, profile.recommended_gpu)
     name = config.instance_name(deployment.id)

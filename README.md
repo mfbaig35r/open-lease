@@ -72,6 +72,21 @@ See [docs/architecture.md](docs/architecture.md) for the full picture, and
 [requirements/gpu-orchestrator-requirements.md](requirements/gpu-orchestrator-requirements.md) for
 the authoritative spec.
 
+## Any vLLM-servable model
+
+The catalog holds curated, GPU-tuned recipes and marks which are validated on real hardware, but the
+engine is model-neutral. To run a model that is not in the catalog, pass its HF repo directly:
+
+```bash
+gpu deploy --hf-repo Qwen/Qwen3-14B --gpu A100-80GB --wait   # no catalog entry needed
+```
+
+`--gpu` is required (an ad-hoc model has no recommended GPU); `--context`, `--image`, and `--disk`
+tune the rest, and `--set` passes vLLM flags. The deployment carries its own repo id, so it needs no
+catalog lookup to reconcile or route. Agents get the same via the `deploy_hf_model` MCP tool. Adding
+a curated, validated entry to the catalog is a small TOML edit (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ## Docs
 
 - [Architecture](docs/architecture.md) — the seams, the reconcile loop, cost-safety.
@@ -83,8 +98,9 @@ the authoritative spec.
 ## What's not done
 
 - RunPod is the only real provider; the seam is proven but no second provider yet.
-- The catalog is small: qwen3-0.6b / qwen3-8b / qwen3-32b are validated on real hardware;
-  llama-3.1-8b is unvalidated (Meta gating, HF access pending).
+- Only the three qwen models are validated on real hardware; llama-3.1-8b is unvalidated (Meta
+  gating, HF access pending). This is validation coverage, not a limit: any vLLM-servable model
+  runs today via `gpu deploy --hf-repo` (see "Any vLLM-servable model").
 - Gauntlet §18: the 24h soak is not yet run. OOM/terminal-failed is closed (a runtime-crash
   cap drives a persistently-failing deploy to terminal FAILED; covered by an offline test).
 - The warm-cache speedup is proven mechanically but its timing is capacity-pending.

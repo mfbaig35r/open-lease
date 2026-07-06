@@ -48,8 +48,9 @@ class VLLMRuntime(Runtime):
             "--model": spec.hf_repo,
             "--tensor-parallel-size": str(profile.tensor_parallel),
             "--gpu-memory-utilization": str(profile.gpu_memory_utilization),
-            "--max-model-len": str(spec.context_window),
         }
+        if spec.context_window:  # 0 for an ad-hoc deploy with no --context: let vLLM auto-detect
+            args["--max-model-len"] = str(spec.context_window)
         args.update(profile.launch_args)  # profile overrides defaults
 
         command = list(_ENTRYPOINT)

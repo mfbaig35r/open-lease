@@ -63,6 +63,20 @@ async def test_deploy_unknown_model_raises(tmp_path):
         await orch.deploy_model("no-such-model", provider="mock")
 
 
+async def test_deploy_adhoc_no_catalog_entry_reaches_ready(tmp_path):
+    # The engine is model-neutral: deploy any HF repo with no catalog entry. The deployment carries
+    # its own hf_repo, so reconcile builds it without a catalog lookup.
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_adhoc(
+        hf_repo="Qwen/Qwen3-14B", gpu="MOCK-GPU", provider="mock", wait=True
+    )
+    assert dep.observed_state == S.READY
+    assert dep.endpoint_url is not None
+    assert dep.model_id == "qwen3-14b"  # derived from the repo's last segment
+    assert dep.hf_repo == "Qwen/Qwen3-14B"  # self-contained, no catalog needed
+    assert "qwen3-14b" not in {m.id for m in orch.list_models()}  # genuinely off-catalog
+
+
 async def test_stop_deployment(tmp_path):
     orch = _orch(tmp_path)
     dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
