@@ -32,11 +32,16 @@ from ..models import (
 
 
 class DeployRequest(BaseModel):
-    """Body for `POST /deployments` (an interface DTO, not a domain model)."""
+    """Body for `POST /deployments` (an interface DTO, not a domain model). Provide ``model_id`` for
+    a catalog model, or ``hf_repo`` (with ``gpu``) to deploy any vLLM-servable HF repo ad-hoc."""
 
-    model_id: str
+    model_id: str | None = None
+    hf_repo: str | None = None
     provider: str = "runpod"
     gpu: str | None = None
+    context: int | None = None  # ad-hoc: max model length; omit to let vLLM auto-detect
+    image: str | None = None  # ad-hoc: vLLM image
+    disk: int | None = None  # ad-hoc: container disk GB
     wait: bool = False
     overrides: RuntimeOverrides | None = None
 
@@ -56,6 +61,21 @@ def create_app(
 
     @app.post("/deployments")
     async def deploy(body: DeployRequest) -> Deployment:
+        if body.hf_repo:
+            if not body.gpu:
+                raise OrchestratorError("hf_repo requires a gpu (an ad-hoc model has no default)")
+            return await orchestrator.deploy_adhoc(
+                hf_repo=body.hf_repo,
+                gpu=body.gpu,
+                provider=body.provider,
+                context_window=body.context or 0,
+                image=body.image,
+                disk_gb=body.disk,
+                wait=body.wait,
+                overrides=body.overrides,
+            )
+        if not body.model_id:
+            raise OrchestratorError("provide model_id (a catalog model) or hf_repo")
         return await orchestrator.deploy_model(
             body.model_id,
             provider=body.provider,
@@ -105,8 +125,10 @@ def create_app(
         return await orchestrator.list_providers()
 
     @app.get("/availability")
-    async def availability(model_id: str | None = None) -> list[GpuAvailability]:
-        return await orchestrator.gpu_availability(model_id=model_id)
+    async def availability(
+        model_id: str | None = None, gpu: str | None = None
+    ) -> list[GpuAvailability]:
+        return await orchestrator.gpu_availability(model_id=model_id, gpu_type=gpu)
 
     @app.get("/costs")
     def costs(deployment_id: str | None = None) -> list[CostRecord]:
