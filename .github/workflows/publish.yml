@@ -11,6 +11,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Build the visual workbench (open-lease-ui) and bundle it into the package so the released
+      # wheel serves `gpu ui` out of the box. gpu_orchestrator/web is gitignored (a build output),
+      # so it must be produced here. open-lease-ui is a separate repo; checking it out needs read
+      # access: add an OPEN_LEASE_UI_TOKEN secret (a fine-grained PAT with contents:read on
+      # open-lease-ui), or make that repo public and drop the `token:` line. The UI ref defaults to
+      # main; override with an OPEN_LEASE_UI_REF repository variable to pin a tag.
+      - name: Check out open-lease-ui
+        uses: actions/checkout@v4
+        with:
+          repository: mfbaig35r/open-lease-ui
+          ref: ${{ vars.OPEN_LEASE_UI_REF || 'main' }}
+          token: ${{ secrets.OPEN_LEASE_UI_TOKEN }}
+          path: ui-src
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui-src/pnpm-lock.yaml
+      - name: Build + bundle the UI into gpu_orchestrator/web
+        working-directory: ui-src
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build:embedded   # empty NEXT_PUBLIC_API_URL -> same-origin fetches
+          rm -rf ../src/gpu_orchestrator/web
+          cp -r out ../src/gpu_orchestrator/web
+
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
@@ -24,6 +54,13 @@ jobs:
         run: uv run python -m pytest tests/ -q
       - name: Build sdist + wheel
         run: uv build
+      - name: Verify the wheel bundled the UI
+        run: |
+          python -c "import zipfile,glob,sys; w=glob.glob('dist/*.whl')[0]; \
+          names=zipfile.ZipFile(w).namelist(); \
+          ok=any(n.endswith('gpu_orchestrator/web/index.html') for n in names); \
+          print('UI bundled:' if ok else 'MISSING UI in wheel:', w); \
+          sys.exit(0 if ok else 1)"
       - name: Check metadata + README render for PyPI
         run: uvx twine check dist/*
       - uses: actions/upload-artifact@v4
