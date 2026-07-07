@@ -10,10 +10,13 @@ Like the CLI and the proxy, this is an interface: the same core, a different sha
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.staticfiles import StaticFiles
 
 from ..core.orchestrator import Orchestrator
 from ..errors import DeploymentNotFoundError, ModelNotFoundError, OrchestratorError
@@ -53,10 +56,13 @@ class EstimateRequest(BaseModel):
 
 
 def create_app(
-    orchestrator: Orchestrator, *, proxy_transport: httpx.AsyncBaseTransport | None = None
+    orchestrator: Orchestrator,
+    *,
+    proxy_transport: httpx.AsyncBaseTransport | None = None,
+    ui_dir: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="open-lease", version="0.1.0")
-    _install_auth(app, orchestrator)
+    _install_auth(app, orchestrator, ui_served=ui_dir is not None)
     _install_error_handling(app)
 
     @app.post("/deployments")
@@ -144,24 +150,47 @@ def create_app(
             body.model_id, provider=body.provider, hours=body.hours
         )
 
-    # The OpenAI proxy owns /v1/*; mount at root and let its own /v1 routes match.
     from ..proxy.openai_proxy import create_proxy_app
 
-    app.mount("/", create_proxy_app(orchestrator, transport=proxy_transport))
+    proxy = create_proxy_app(orchestrator, transport=proxy_transport)
+    if ui_dir is not None:
+        # Both the proxy and the UI want "/", so the proxy can't stay a "/" sub-mount here. Register
+        # its /v1 routes directly (after the management routes), then serve the built UI as the
+        # catch-all at "/". `gpu ui` / `gpu serve --ui` set this; without it, API-only as before.
+        app.router.routes.extend(proxy.routes)
+        app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+    else:
+        # The OpenAI proxy owns /v1/*; mount at root and let its own /v1 routes match.
+        app.mount("/", proxy)
     return app
 
 
 # --- plumbing -------------------------------------------------------------------------
 
 _OPEN_PATHS = {"/docs", "/openapi.json", "/redoc"}
+# The management + inference paths a token guards. When the UI is served, only these are guarded, so
+# the static assets (which a browser cannot send a bearer header for) load; the UI's own API calls
+# carry the token.
+_API_PREFIXES = (
+    "/deployments",
+    "/models",
+    "/providers",
+    "/availability",
+    "/costs",
+    "/volumes",
+    "/estimate",
+    "/v1",
+)
 
 
-def _install_auth(app: FastAPI, orchestrator: Orchestrator) -> None:
+def _install_auth(app: FastAPI, orchestrator: Orchestrator, *, ui_served: bool = False) -> None:
     token = orchestrator.config.api_token
 
     @app.middleware("http")
     async def _auth(request: Request, call_next):
-        if token is not None and request.url.path not in _OPEN_PATHS:
+        path = request.url.path
+        guarded = path not in _OPEN_PATHS and (not ui_served or path.startswith(_API_PREFIXES))
+        if token is not None and guarded:
             if request.headers.get("authorization") != f"Bearer {token.get_secret_value()}":
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)

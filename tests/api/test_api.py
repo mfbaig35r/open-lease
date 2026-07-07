@@ -66,6 +66,31 @@ def test_deploy_adhoc_requires_gpu(tmp_path):
     assert "gpu" in resp.json()["error"]
 
 
+def test_serves_ui_when_ui_dir_set(tmp_path):
+    ui = tmp_path / "web"
+    ui.mkdir()
+    (ui / "index.html").write_text("<html>workbench</html>")
+    cfg = Config(namespace="test", state_db=tmp_path / "api.db", reconcile_interval=0)
+    orch = Orchestrator(cfg, provider=MockProvider(namespace="test"), runtime=_runtime())
+    client = TestClient(create_app(orch, ui_dir=ui))
+    assert client.get("/").text == "<html>workbench</html>"  # UI at /
+    assert client.get("/deployments").status_code == 200  # management API still works
+    assert client.get("/v1/models").status_code == 200  # proxy /v1 still works alongside the UI
+
+
+def test_ui_static_is_open_but_api_guarded_with_token(tmp_path):
+    ui = tmp_path / "web"
+    ui.mkdir()
+    (ui / "index.html").write_text("ok")
+    cfg = Config(
+        namespace="test", state_db=tmp_path / "api.db", reconcile_interval=0, api_token="secret"
+    )
+    orch = Orchestrator(cfg, provider=MockProvider(namespace="test"), runtime=_runtime())
+    client = TestClient(create_app(orch, ui_dir=ui))
+    assert client.get("/").status_code == 200  # static assets load without a token
+    assert client.get("/deployments").status_code == 401  # API still requires it
+
+
 def test_get_unknown_is_404(tmp_path):
     resp = _client(tmp_path).get("/deployments/nope")
     assert resp.status_code == 404
