@@ -18,7 +18,7 @@ import re
 import socket
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -118,6 +118,19 @@ class Config(BaseSettings):
     api_port: int = 8000
     api_token: SecretStr | None = None  # if set, all routes require `Authorization: Bearer <token>`
     ui_dir: Path | None = None  # a built open-lease-ui to serve at /; `gpu ui` sets this
+    # Opt-in cross-origin: origins the hosted workbench may call this API from. Empty = off (the API
+    # is same-origin only). Set via GPU_ORCH_CORS_ORIGINS (comma-separated) or `gpu serve
+    # --cors-origin`. Never use "*": that would let any site drive a running server (spec §12 note).
+    cors_origins: list[str] = Field(default_factory=list)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        # GPU_ORCH_CORS_ORIGINS arrives as a comma-separated string from the env; accept that as
+        # well as a real list (from a toml array or init kwarg).
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
 
     @classmethod
     def settings_customise_sources(
