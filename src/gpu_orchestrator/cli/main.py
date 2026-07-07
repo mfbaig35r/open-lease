@@ -462,7 +462,14 @@ def _bundled_ui() -> Path | None:
     return None
 
 
-def _run_api(host: str, port: int, *, ui_dir: Path | None, open_browser: bool) -> None:
+def _run_api(
+    host: str,
+    port: int,
+    *,
+    ui_dir: Path | None,
+    open_browser: bool,
+    cors_origins: list[str] | None = None,
+) -> None:
     import uvicorn
 
     try:
@@ -475,10 +482,15 @@ def _run_api(host: str, port: int, *, ui_dir: Path | None, open_browser: bool) -
     render.console.print(
         f"open-lease {what} on [b]http://{host}:{port}[/b] ({authed}). Ctrl-C to stop."
     )
+    if cors_origins:
+        render.console.print(f"  cross-origin allowed for: {', '.join(cors_origins)}")
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(f"http://{host}:{port}")).start()
     uvicorn.run(
-        create_app(_orchestrator(), ui_dir=ui_dir), host=host, port=port, log_level="warning"
+        create_app(_orchestrator(), ui_dir=ui_dir, cors_origins=cors_origins),
+        host=host,
+        port=port,
+        log_level="warning",
     )
 
 
@@ -487,11 +499,23 @@ def serve(
     host: str | None = typer.Option(None, "--host"),
     port: int | None = typer.Option(None, "--port"),
     ui: str | None = typer.Option(None, "--ui", help="Serve a built open-lease-ui directory at /."),
+    cors_origin: list[str] = typer.Option(
+        [],
+        "--cors-origin",
+        help="Allow a hosted UI at this origin to call the API (repeatable). Off by default.",
+    ),
 ) -> None:
     """Start the REST API (management routes + the OpenAI proxy at /v1/*)."""
     cfg = _config()
     ui_dir = Path(ui) if ui else cfg.ui_dir
-    _run_api(host or cfg.api_host, port or cfg.api_port, ui_dir=ui_dir, open_browser=False)
+    origins = cors_origin or cfg.cors_origins
+    _run_api(
+        host or cfg.api_host,
+        port or cfg.api_port,
+        ui_dir=ui_dir,
+        open_browser=False,
+        cors_origins=origins,
+    )
 
 
 @app.command()

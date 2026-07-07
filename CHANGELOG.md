@@ -7,6 +7,10 @@ All notable changes to open-lease are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Opt-in cross-origin for a hosted workbench: `gpu serve --cors-origin <origin>` (repeatable, or
+  `GPU_ORCH_CORS_ORIGINS`) lets a UI at that exact origin call the API, including the Private Network
+  Access preflight ack Chrome requires for a public HTTPS page to reach a loopback server. Off by
+  default (same-origin only) and never wildcarded, so a running server is not exposed to other sites.
 - `gpu ui` launches the local visual workbench (the open-lease-ui front end) served by the API at
   `/` and opens it in the browser; `gpu serve --ui <dir>` serves a built UI alongside the management
   API and the OpenAI proxy. The UI is auto-detected when bundled into the package.

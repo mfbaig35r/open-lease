@@ -16,6 +16,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
 from ..core.orchestrator import Orchestrator
@@ -60,10 +61,14 @@ def create_app(
     *,
     proxy_transport: httpx.AsyncBaseTransport | None = None,
     ui_dir: Path | None = None,
+    cors_origins: list[str] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="open-lease", version="0.1.0")
     _install_auth(app, orchestrator, ui_served=ui_dir is not None)
     _install_error_handling(app)
+    _install_cors(
+        app, cors_origins if cors_origins is not None else orchestrator.config.cors_origins
+    )
 
     @app.post("/deployments")
     async def deploy(body: DeployRequest) -> Deployment:
@@ -194,6 +199,29 @@ def _install_auth(app: FastAPI, orchestrator: Orchestrator, *, ui_served: bool =
             if request.headers.get("authorization") != f"Bearer {token.get_secret_value()}":
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
+
+
+def _install_cors(app: FastAPI, origins: list[str]) -> None:
+    """Opt-in cross-origin for the hosted workbench. No origins => untouched (same-origin only).
+
+    An HTTPS page calling a local server needs two things: standard CORS, and a Private Network
+    Access ack on the preflight (Chrome requires it for public -> loopback). Never wildcard: only
+    the configured origins, so a running server is never exposed to arbitrary sites.
+    """
+    if not origins:
+        return
+
+    # Added after auth so it wraps (outer to) auth: CORS answers the preflight OPTIONS before auth
+    # can 401 it (a preflight carries no Authorization header). allow_private_network sends the ack
+    # Chrome requires for a public HTTPS page -> loopback server.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+        allow_credentials=False,
+        allow_private_network=True,
+    )
 
 
 def _install_error_handling(app: FastAPI) -> None:

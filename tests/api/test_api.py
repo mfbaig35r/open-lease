@@ -91,6 +91,49 @@ def test_ui_static_is_open_but_api_guarded_with_token(tmp_path):
     assert client.get("/deployments").status_code == 401  # API still requires it
 
 
+def _cors_app(tmp_path, origins):
+    cfg = Config(namespace="test", state_db=tmp_path / "api.db", reconcile_interval=0)
+    orch = Orchestrator(cfg, provider=MockProvider(namespace="test"), runtime=_runtime())
+    return TestClient(create_app(orch, cors_origins=origins))
+
+
+def test_cors_preflight_allows_configured_origin(tmp_path):
+    origin = "https://openlease.canonicalresearch.dev"
+    client = _cors_app(tmp_path, [origin])
+    resp = client.options(
+        "/deployments",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == origin
+    # Chrome needs this ack to let a public HTTPS page reach a loopback server.
+    assert resp.headers["access-control-allow-private-network"] == "true"
+    # The real request echoes the origin too.
+    got = client.get("/deployments", headers={"Origin": origin})
+    assert got.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_unconfigured_origin(tmp_path):
+    client = _cors_app(tmp_path, ["https://openlease.canonicalresearch.dev"])
+    resp = client.get("/deployments", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in resp.headers  # not the allowed origin
+
+
+def test_cors_off_by_default(tmp_path):
+    client = _client(tmp_path)  # no cors_origins
+    resp = client.get("/deployments", headers={"Origin": "https://openlease.canonicalresearch.dev"})
+    assert "access-control-allow-origin" not in resp.headers
+
+
+def test_cors_origins_env_csv_parses():
+    cfg = Config(cors_origins="https://a.example, https://b.example")
+    assert cfg.cors_origins == ["https://a.example", "https://b.example"]
+
+
 def test_get_unknown_is_404(tmp_path):
     resp = _client(tmp_path).get("/deployments/nope")
     assert resp.status_code == 404
