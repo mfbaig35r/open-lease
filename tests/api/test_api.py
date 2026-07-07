@@ -45,6 +45,27 @@ def test_deploy_list_get(tmp_path):
     assert client.get(f"/deployments/{dep['id']}").json()["observed_state"] == "ready"
 
 
+def test_deploy_adhoc_hf_repo(tmp_path):
+    client = _client(tmp_path)
+    resp = client.post(
+        "/deployments",
+        json={"hf_repo": "Qwen/Qwen3-14B", "gpu": "MOCK-GPU", "provider": "mock", "wait": True},
+    )
+    assert resp.status_code == 200
+    dep = resp.json()
+    assert dep["model_id"] == "qwen3-14b"  # derived; no catalog entry
+    assert dep["hf_repo"] == "Qwen/Qwen3-14B"
+    assert dep["observed_state"] == "ready"
+
+
+def test_deploy_adhoc_requires_gpu(tmp_path):
+    resp = _client(tmp_path).post(
+        "/deployments", json={"hf_repo": "Qwen/Qwen3-14B", "provider": "mock"}
+    )
+    assert resp.status_code == 400
+    assert "gpu" in resp.json()["error"]
+
+
 def test_get_unknown_is_404(tmp_path):
     resp = _client(tmp_path).get("/deployments/nope")
     assert resp.status_code == 404

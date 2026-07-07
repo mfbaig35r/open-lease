@@ -6,6 +6,11 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- REST API: `POST /deployments` accepts `hf_repo` (+ `gpu`, `context`, `image`, `disk`) to deploy an
+  ad-hoc model with no catalog entry, mirroring `gpu deploy --hf-repo`; `GET /availability` accepts a
+  `gpu` query param to check a specific GPU. (Backs the open-lease-ui deploy wizard.)
+
 ## [0.2.0] - 2026-07-06
 
 ### Added
