@@ -7,6 +7,9 @@ All notable changes to open-lease are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `gpu ui` launches the local visual workbench (the open-lease-ui front end) served by the API at
+  `/` and opens it in the browser; `gpu serve --ui <dir>` serves a built UI alongside the management
+  API and the OpenAI proxy. The UI is auto-detected when bundled into the package.
 - REST API: `POST /deployments` accepts `hf_repo` (+ `gpu`, `context`, `image`, `disk`) to deploy an
   ad-hoc model with no catalog entry, mirroring `gpu deploy --hf-repo`; `GET /availability` accepts a
   `gpu` query param to check a specific GPU. (Backs the open-lease-ui deploy wizard.)

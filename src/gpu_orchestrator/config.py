@@ -117,6 +117,7 @@ class Config(BaseSettings):
     api_host: str = "localhost"  # bind localhost by default; set explicitly to expose on a network
     api_port: int = 8000
     api_token: SecretStr | None = None  # if set, all routes require `Authorization: Bearer <token>`
+    ui_dir: Path | None = None  # a built open-lease-ui to serve at /; `gpu ui` sets this
 
     @classmethod
     def settings_customise_sources(

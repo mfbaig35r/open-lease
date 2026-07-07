@@ -9,8 +9,12 @@ traceback. Read commands take ``--json`` for scripting.
 from __future__ import annotations
 
 import asyncio
+import importlib.resources
+import threading
+import webbrowser
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from pathlib import Path
 from typing import TypeVar
 
 import typer
@@ -447,12 +451,18 @@ def proxy(
         process.clear_pid(cfg.proxy_pid_file)
 
 
-@app.command()
-def serve(
-    host: str | None = typer.Option(None, "--host"),
-    port: int | None = typer.Option(None, "--port"),
-) -> None:
-    """Start the REST API (management routes + the OpenAI proxy at /v1/*)."""
+def _bundled_ui() -> Path | None:
+    """The UI built into the package (gpu_orchestrator/web), if present (bundled at release)."""
+    try:
+        base = importlib.resources.files("gpu_orchestrator") / "web"
+        if (base / "index.html").is_file():
+            return Path(str(base))
+    except (ModuleNotFoundError, FileNotFoundError, NotADirectoryError):
+        pass
+    return None
+
+
+def _run_api(host: str, port: int, *, ui_dir: Path | None, open_browser: bool) -> None:
     import uvicorn
 
     try:
@@ -460,14 +470,46 @@ def serve(
     except ImportError:
         _fail_msg("the REST API needs the 'api' extra: pip install 'open-lease[api]'")
 
-    cfg = _config()
-    host = host or cfg.api_host
-    port = port or cfg.api_port
-    authed = "token required" if cfg.api_token is not None else "OPEN (no api_token set)"
+    authed = "token required" if _config().api_token is not None else "OPEN (no api_token set)"
+    what = "workbench (UI + API)" if ui_dir else "API"
     render.console.print(
-        f"open-lease API on [b]http://{host}:{port}[/b] ({authed}). Docs at /docs. Ctrl-C to stop."
+        f"open-lease {what} on [b]http://{host}:{port}[/b] ({authed}). Ctrl-C to stop."
     )
-    uvicorn.run(create_app(_orchestrator()), host=host, port=port, log_level="warning")
+    if open_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+    uvicorn.run(
+        create_app(_orchestrator(), ui_dir=ui_dir), host=host, port=port, log_level="warning"
+    )
+
+
+@app.command()
+def serve(
+    host: str | None = typer.Option(None, "--host"),
+    port: int | None = typer.Option(None, "--port"),
+    ui: str | None = typer.Option(None, "--ui", help="Serve a built open-lease-ui directory at /."),
+) -> None:
+    """Start the REST API (management routes + the OpenAI proxy at /v1/*)."""
+    cfg = _config()
+    ui_dir = Path(ui) if ui else cfg.ui_dir
+    _run_api(host or cfg.api_host, port or cfg.api_port, ui_dir=ui_dir, open_browser=False)
+
+
+@app.command()
+def ui(
+    host: str | None = typer.Option(None, "--host"),
+    port: int | None = typer.Option(None, "--port"),
+    ui_dir_opt: str | None = typer.Option(
+        None, "--ui-dir", help="Path to a built open-lease-ui (default: the bundled copy)."
+    ),
+) -> None:
+    """Launch the visual workbench: the API + UI at /, opened in your browser."""
+    cfg = _config()
+    ui_dir = Path(ui_dir_opt) if ui_dir_opt else (cfg.ui_dir or _bundled_ui())
+    if ui_dir is None:
+        _fail_msg(
+            "no UI found; build open-lease-ui (`pnpm bundle`) to embed it, or pass --ui-dir <dir>."
+        )
+    _run_api(host or cfg.api_host, port or cfg.api_port, ui_dir=ui_dir, open_browser=True)
 
 
 @app.command()
