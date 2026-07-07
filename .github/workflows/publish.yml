@@ -14,16 +14,13 @@ jobs:
 
       # Build the visual workbench (open-lease-ui) and bundle it into the package so the released
       # wheel serves `gpu ui` out of the box. gpu_orchestrator/web is gitignored (a build output),
-      # so it must be produced here. open-lease-ui is a separate repo; checking it out needs read
-      # access: add an OPEN_LEASE_UI_TOKEN secret (a fine-grained PAT with contents:read on
-      # open-lease-ui), or make that repo public and drop the `token:` line. The UI ref defaults to
-      # main; override with an OPEN_LEASE_UI_REF repository variable to pin a tag.
+      # so it must be produced here. open-lease-ui is a public repo, so a plain checkout works. The
+      # UI ref defaults to main; override with an OPEN_LEASE_UI_REF repository variable to pin a tag.
       - name: Check out open-lease-ui
         uses: actions/checkout@v4
         with:
           repository: mfbaig35r/open-lease-ui
           ref: ${{ vars.OPEN_LEASE_UI_REF || 'main' }}
-          token: ${{ secrets.OPEN_LEASE_UI_TOKEN }}
           path: ui-src
       - uses: pnpm/action-setup@v4
         with:
