@@ -18,6 +18,12 @@ All notable changes to open-lease are documented here. The format follows
   ad-hoc model with no catalog entry, mirroring `gpu deploy --hf-repo`; `GET /availability` accepts a
   `gpu` query param to check a specific GPU. (Backs the open-lease-ui deploy wizard.)
 
+### Fixed
+- Adopted instances now open a cost record. A pod recovered by tag (spec §7.5) after a crash in the
+  narrow create/persist window previously accrued nothing, so reported spend could silently drift
+  below the provider's actual meter. `reconcile_once` opens a record on adoption when none is open
+  (best-effort, never blocking the reconcile tick).
+
 ## [0.2.0] - 2026-07-06
 
 ### Added

@@ -26,7 +26,7 @@ from datetime import datetime
 
 from ..config import Config
 from ..core.catalog import Catalog
-from ..errors import ProviderError, ReconcileError, RuntimeError_
+from ..errors import OrchestratorError, ProviderError, ReconcileError, RuntimeError_
 from ..events import EventLog
 from ..logging import get_logger
 from ..models import (
@@ -348,6 +348,23 @@ async def _destroy_instance(
     deployment.endpoint_url = None
 
 
+async def _ensure_adopted_cost_record(
+    deployment: Deployment, provider: Provider, now: datetime, store: Store
+) -> None:
+    """Open a cost record for a just-adopted pod (spec §7.5) if none is accruing, so a pod recovered
+    after a crash in the create/persist window still reports its provider spend. Best-effort: a
+    failure to resolve the rate must never derail the reconcile tick, so it logs and skips."""
+    try:
+        gpu = await _resolve_gpu(provider, deployment.profile.recommended_gpu)
+    except OrchestratorError as exc:
+        _log.warning(
+            "could not open cost record for adopted instance",
+            extra={"deployment": deployment.id, "error": str(exc)},
+        )
+        return
+    costs.open_record_if_absent(deployment, gpu.hourly_usd, now, store)
+
+
 async def _resolve_gpu(provider: Provider, wanted: str) -> GPUType:
     caps = await provider.capabilities()
     for gpu in caps.gpu_types:
@@ -392,6 +409,7 @@ async def reconcile_once(
     if obs.endpoint_url is not None:
         deployment.endpoint_url = obs.endpoint_url
     if obs.adopted:
+        await _ensure_adopted_cost_record(deployment, provider, now, store)
         outcomes.emit(
             events,
             deployment,

@@ -114,6 +114,32 @@ async def test_reconcile_adopts_existing_instance(tmp_path):
     assert len(adopted) == 1
 
 
+async def test_reconcile_opens_cost_record_for_adopted_instance(tmp_path):
+    # A pod recovered after a crash (before its create-time cost record was written) must still
+    # accrue, so reported spend matches the provider meter (cost-safety §7.5, §11).
+    provider = MockProvider(namespace="test")
+    await provider.create_instance(
+        InstanceRequest(
+            name="gpu-orch-test-dep-test01",
+            gpu_type="MOCK-GPU",
+            image="img",
+            disk_gb=10,
+            ports=[8000],
+        )
+    )
+    ctx = _ctx(tmp_path, provider)
+    dep = _new_deployment()  # no instance and no cost record on the record
+    ctx["store"].save_deployment(dep)
+    assert ctx["store"].get_cost_records("dep-test01") == []
+
+    dep = await reconcile_once(dep, **ctx, now=_BASE)
+
+    assert dep.instance is not None  # adopted
+    (record,) = ctx["store"].get_cost_records("dep-test01")
+    assert record.stopped_at is None  # open / accruing
+    assert record.gpu_hourly_usd > 0
+
+
 async def test_reconcile_recreates_after_out_of_band_death(tmp_path):
     provider = MockProvider(namespace="test")
     ctx = _ctx(tmp_path, provider)
