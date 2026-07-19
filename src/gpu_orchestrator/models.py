@@ -369,6 +369,37 @@ class CostEstimate(BaseModel):
     estimated_usd: float
 
 
+class UsageSummary(BaseModel):
+    """Token throughput and cost for a deployment (spec §11 extension). ``tokens_per_sec`` is the
+    utilization signal (tokens served per second of rented time); ``cost_per_mtok`` is the crossover
+    metric against per-token API pricing. Both fall to 0/None with no traffic yet."""
+
+    deployment_id: str
+    model_id: str
+    requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    accrued_usd: float
+    uptime_seconds: float
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def tokens_per_sec(self) -> float:
+        return round(self.total_tokens / self.uptime_seconds, 1) if self.uptime_seconds > 0 else 0.0
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_per_mtok(self) -> float | None:
+        if not self.total_tokens:
+            return None
+        return round(self.accrued_usd / self.total_tokens * 1_000_000, 2)
+
+
 class Event(BaseModel):
     """Append-only. No subscribers, no bus (spec §12)."""
 

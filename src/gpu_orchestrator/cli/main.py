@@ -308,6 +308,19 @@ def costs(
 
 
 @app.command()
+def usage(
+    deployment_id: str | None = typer.Argument(None), json_: bool = typer.Option(False, "--json")
+) -> None:
+    """Token throughput and cost per model: requests, tokens, tokens/sec (utilization), and $/M
+    tokens (the crossover metric vs per-token API pricing). Metered by the OpenAI proxy."""
+    summaries = _call(_orchestrator().get_usage, deployment_id)
+    if json_:
+        render.emit_json(summaries)
+        return
+    render.usage_table(summaries)
+
+
+@app.command()
 def events(
     deployment_id: str,
     since: str | None = typer.Option(None, "--since", help="ISO timestamp."),
