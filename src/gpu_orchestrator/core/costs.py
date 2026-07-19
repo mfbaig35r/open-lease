@@ -33,6 +33,26 @@ def open_record(deployment: Deployment, gpu_hourly_usd: float, now: datetime, st
     )
 
 
+def open_record_if_absent(
+    deployment: Deployment, gpu_hourly_usd: float, started_at: datetime, store: Store
+) -> None:
+    """Open a cost accrual only if the deployment has no open record. Used on adoption (spec
+    §7.5): a recovered pod is billed by the provider from the moment it exists, so it must accrue
+    even when its create-time ``open_record`` was lost to a crash in the create/persist window.
+    Never duplicates or resets an existing open record. ``started_at`` is adoption time (the
+    Instance carries no provider createdAt), so the pre-adoption gap is under-counted, not lost."""
+    for record in store.get_cost_records(deployment.id):
+        if record.stopped_at is None:
+            return
+    store.save_cost_record(
+        CostRecord(
+            deployment_id=deployment.id,
+            gpu_hourly_usd=gpu_hourly_usd,
+            started_at=started_at,
+        )
+    )
+
+
 def close_open_records(deployment_id: str, now: datetime, store: Store) -> None:
     """Stop accrual on every open record for a deployment (instance destroyed). Idempotent: closing
     an already-closed or absent record is a no-op."""

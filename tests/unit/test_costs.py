@@ -24,6 +24,26 @@ def test_open_record_starts_accrual(tmp_path):
     assert records[0].gpu_hourly_usd == 1.89
 
 
+def test_open_record_if_absent_opens_when_none_open(tmp_path):
+    store = Store(tmp_path / "c.db")
+    dep = make_deployment(DeploymentState.PROVISIONING)
+    costs.open_record_if_absent(dep, 1.5, _T0, store)
+    (record,) = store.get_cost_records(dep.id)
+    assert record.stopped_at is None
+    assert record.gpu_hourly_usd == 1.5
+
+
+def test_open_record_if_absent_is_noop_when_one_is_open(tmp_path):
+    # Adoption must not duplicate or reset an accrual that is already running.
+    store = Store(tmp_path / "c.db")
+    dep = make_deployment(DeploymentState.READY)
+    costs.open_record(dep, 2.0, _T0, store)
+    costs.open_record_if_absent(dep, 9.99, _T0 + timedelta(hours=1), store)
+    (record,) = store.get_cost_records(dep.id)
+    assert record.gpu_hourly_usd == 2.0  # original, untouched
+    assert record.started_at == _T0
+
+
 def test_close_sets_stopped_and_accrued(tmp_path):
     store = Store(tmp_path / "c.db")
     dep = make_deployment(DeploymentState.READY)
