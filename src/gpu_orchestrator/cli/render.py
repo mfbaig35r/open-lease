@@ -124,7 +124,11 @@ def deployments_table(deployments: list[Deployment], accrued: dict[str, float]) 
     for col in ("ID", "MODEL", "STATE", "GPU", "ENDPOINT", "UPTIME", "ACCRUED $"):
         table.add_column(col)
     for dep in deployments:
-        gpu = dep.instance.gpu_type if dep.instance else "-"
+        gpu = "-"
+        if dep.instance:
+            gpu = dep.instance.gpu_type
+            if dep.instance.gpu_count > 1:
+                gpu = f"{dep.instance.gpu_count}x {gpu}"
         hint = progress_hint(dep)
         state_cell = _state(dep.observed_state) + (f" [dim]{hint}[/]" if hint else "")
         table.add_row(

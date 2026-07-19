@@ -19,6 +19,16 @@ def _request(provider: MockProvider, deployment_id: str = "dep-1") -> InstanceRe
     )
 
 
+async def test_gpu_count_round_trips_through_provider():
+    # A multi-GPU request provisions that many GPUs, and get_instance reports it back.
+    provider = MockProvider(namespace="test")
+    req = _request(provider).model_copy(update={"gpu_count": 4})
+    inst = await provider.create_instance(req)
+    assert inst.gpu_count == 4
+    fetched = await provider.get_instance(inst.provider_instance_id)
+    assert fetched is not None and fetched.gpu_count == 4
+
+
 async def test_state_advances_to_running_and_endpoint_resolves():
     provider = MockProvider(namespace="test", steps_to_running=1)
     instance = await provider.create_instance(_request(provider))

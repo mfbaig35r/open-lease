@@ -107,7 +107,7 @@ class RunPodProvider(Provider):
             "imageName": request.image,
             # gpuTypeIds is an ordered preference list of literal RunPod ids (runpod-ephemeral).
             "gpuTypeIds": [request.gpu_type],
-            "gpuCount": 1,
+            "gpuCount": request.gpu_count,
             "cloudType": "SECURE",
             "containerDiskInGb": request.disk_gb,
             "env": request.env or None,
@@ -300,6 +300,7 @@ class RunPodProvider(Provider):
             provider_instance_id=str(data["id"]),
             provider=self.name,
             gpu_type=str(data.get("machine", {}).get("gpuTypeId", "") or data.get("gpuTypeId", "")),
+            gpu_count=int(data.get("gpuCount", 1) or 1),
             state=str(data.get("desiredStatus", "")),
             public_url=None,
             ports=[],

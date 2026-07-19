@@ -60,6 +60,9 @@ class VLLMRuntime(Runtime):
         return InstanceRequest(
             name=name,
             gpu_type=gpu.provider_sku,
+            # One knob drives both: the pod gets tensor_parallel GPUs and vLLM shards across exactly
+            # that many. They must match.
+            gpu_count=profile.tensor_parallel,
             image=profile.image,
             env=dict(profile.env),
             disk_gb=profile.min_disk_gb,

@@ -186,6 +186,9 @@ class InstanceRequest(BaseModel):
 
     name: str
     gpu_type: str
+    # GPUs per pod. A tensor-parallel deploy (profile.tensor_parallel > 1) requests more than one;
+    # it must equal vLLM's --tensor-parallel-size or the runtime fails asking for GPUs it lacks.
+    gpu_count: int = 1
     image: str
     env: dict[str, str] = Field(default_factory=dict)
     disk_gb: int
@@ -210,6 +213,7 @@ class Instance(BaseModel):
     provider_instance_id: str
     provider: str
     gpu_type: str
+    gpu_count: int = 1  # GPUs backing this pod (for cost = rate x count and status display)
     state: str  # provider-native, verbatim
     public_url: str | None = None
     ports: list[int] = Field(default_factory=list)

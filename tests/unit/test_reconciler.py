@@ -140,6 +140,21 @@ async def test_reconcile_opens_cost_record_for_adopted_instance(tmp_path):
     assert record.gpu_hourly_usd > 0
 
 
+async def test_multi_gpu_deploy_provisions_and_bills_per_gpu(tmp_path):
+    # A tensor-parallel deploy provisions N GPUs and accrues at N x the single-GPU rate.
+    ctx = _ctx(tmp_path, MockProvider(namespace="test"))
+    dep = _new_deployment()
+    dep.profile = _PROFILE.model_copy(update={"tensor_parallel": 2})
+    ctx["store"].save_deployment(dep)
+
+    dep = await reconcile_once(dep, **ctx)  # first tick: CREATE_INSTANCE
+
+    assert dep.instance is not None
+    assert dep.instance.gpu_count == 2  # pod got 2 GPUs
+    (record,) = ctx["store"].get_cost_records("dep-test01")
+    assert record.gpu_hourly_usd == 0.50 * 2  # MOCK-GPU is $0.50/hr, billed per GPU
+
+
 async def test_reconcile_recreates_after_out_of_band_death(tmp_path):
     provider = MockProvider(namespace="test")
     ctx = _ctx(tmp_path, provider)
