@@ -73,10 +73,12 @@ class _Pod:
         gpu_type: str,
         ports: list[int],
         network_volume_id: str | None = None,
+        gpu_count: int = 1,
     ) -> None:
         self.id = instance_id
         self.name = name
         self.gpu_type = gpu_type
+        self.gpu_count = gpu_count
         self.ports = ports
         self.network_volume_id = network_volume_id  # what cache volume (if any) this pod attached
         self.observations = 0
@@ -132,7 +134,12 @@ class MockProvider(Provider):
         self._counter += 1
         instance_id = f"mock-{self._counter}"
         self._pods[instance_id] = _Pod(
-            instance_id, request.name, request.gpu_type, request.ports, request.network_volume_id
+            instance_id,
+            request.name,
+            request.gpu_type,
+            request.ports,
+            request.network_volume_id,
+            gpu_count=request.gpu_count,
         )
         return self._instance(self._pods[instance_id])
 
@@ -209,6 +216,7 @@ class MockProvider(Provider):
             provider_instance_id=pod.id,
             provider=self.name,
             gpu_type=pod.gpu_type,
+            gpu_count=pod.gpu_count,
             state=pod.state(self.steps_to_running),
             public_url=None,
             ports=pod.ports,

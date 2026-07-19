@@ -6,6 +6,13 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Multi-GPU (tensor-parallel) deploys. A model whose profile sets `tensor_parallel > 1` now
+  provisions a pod with that many GPUs and shards vLLM across them. `InstanceRequest.gpu_count` is
+  driven from `tensor_parallel`, the RunPod provider requests it (was hardcoded to 1), and cost
+  accrues at the per-GPU rate times the count; `gpu status` shows `Nx <gpu>`. Single-pod only
+  (NVLink/PCIe tensor parallelism); multi-node is out of scope.
+
 ## [0.3.0] - 2026-07-18
 
 ### Added

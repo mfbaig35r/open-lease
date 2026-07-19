@@ -36,6 +36,16 @@ def test_build_instance_request_composes_command():
     assert args["--model"] == "Qwen/Qwen3-0.6B"
     assert args["--tensor-parallel-size"] == "1"
     assert args["--max-model-len"] == str(QWEN3_06B_SPEC.context_window)
+    assert req.gpu_count == 1
+
+
+def test_tensor_parallel_sets_gpu_count_and_flag_together():
+    # One knob: a tensor-parallel deploy requests that many GPUs AND shards vLLM across them.
+    rt = VLLMRuntime()
+    profile = QWEN3_06B_PROFILE.model_copy(update={"tensor_parallel": 4})
+    req = rt.build_instance_request(QWEN3_06B_SPEC, profile, _GPU, name="n")
+    assert req.gpu_count == 4
+    assert _pairs(req.command)["--tensor-parallel-size"] == "4"
 
 
 def test_profile_launch_args_override_defaults():

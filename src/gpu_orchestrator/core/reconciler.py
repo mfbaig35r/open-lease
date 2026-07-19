@@ -287,8 +287,9 @@ async def _create_instance(
     request = _inject_secrets(request, config)
     request = await _attach_cache_volume(request, provider, config)
     deployment.instance = await provider.create_instance(request)
-    # Cost accrues from the moment the instance exists (§11), at the resolved GPU's rate.
-    costs.open_record(deployment, gpu.hourly_usd, now, store)
+    # Cost accrues from the moment the instance exists (§11), at the resolved GPU's rate times the
+    # number of GPUs in the pod (a tensor-parallel deploy bills per GPU).
+    costs.open_record(deployment, gpu.hourly_usd * request.gpu_count, now, store)
 
 
 _STOCK_RANK = {"High": 3, "Medium": 2, "Low": 1}
@@ -362,7 +363,8 @@ async def _ensure_adopted_cost_record(
             extra={"deployment": deployment.id, "error": str(exc)},
         )
         return
-    costs.open_record_if_absent(deployment, gpu.hourly_usd, now, store)
+    gpu_count = deployment.instance.gpu_count if deployment.instance else 1
+    costs.open_record_if_absent(deployment, gpu.hourly_usd * gpu_count, now, store)
 
 
 async def _resolve_gpu(provider: Provider, wanted: str) -> GPUType:
