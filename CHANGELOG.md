@@ -18,6 +18,11 @@ All notable changes to open-lease are documented here. The format follows
   `GET /usage` and the `get_usage` MCP tool) reports requests, tokens, tokens/sec (utilization),
   accrued cost, and $/million-tokens, the crossover metric against per-token API pricing. Metering
   runs in the background so forwarding stays byte-for-byte; usage is pruned with events on retention.
+- `gpu batch <deployment> <input.jsonl>` fans a file of prompts out over a READY deployment with
+  bounded concurrency (`--concurrency`) and per-item retries, writing one result line per input.
+  Throughput-bound batch work, the cheap way to parse thousands of documents; metered like proxy
+  traffic so a run shows up in `gpu usage`. Accepts full chat requests, `{"prompt": ...}` objects,
+  or bare strings, with an optional `--system` prompt.
 
 ## [0.3.0] - 2026-07-18
 

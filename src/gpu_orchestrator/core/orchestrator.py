@@ -13,7 +13,7 @@ a caller passes ``wait=True`` the facade drives ``reconcile_once`` inline until 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from uuid import uuid4
 
@@ -42,7 +42,7 @@ from ..models import (
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
-from . import health, usage
+from . import batch, health, usage
 from .catalog import Catalog, load_catalog
 from .reconciler import reconcile_once
 
@@ -239,6 +239,39 @@ class Orchestrator:
         if deployment_id is not None:
             deployments = [d for d in deployments if d.id == deployment_id]
         return [usage.summary(self._store, d) for d in deployments]
+
+    async def run_batch(
+        self,
+        deployment_id: str,
+        items: list[batch.BatchItem],
+        *,
+        concurrency: int = 64,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        retries: int = 3,
+        on_done: Callable[[batch.BatchResult], None] | None = None,
+    ) -> list[batch.BatchResult]:
+        """Fan a list of prompts out over a READY deployment (spec §13). Throughput-bound batch
+        work; results are metered like any proxy traffic so a run shows up in `gpu usage`."""
+        deployment = self._store.get_deployment(deployment_id)  # raises if unknown
+        if deployment.observed_state != DeploymentState.READY or not deployment.endpoint_url:
+            raise ReconcileError(
+                f"{deployment_id} is not READY (state: {deployment.observed_state.value})"
+            )
+        served = deployment.hf_repo or {m.id: m.hf_repo for m in self.list_models()}.get(
+            deployment.model_id, deployment.model_id
+        )
+        return await batch.run(
+            self._store,
+            deployment,
+            served,
+            items,
+            concurrency=concurrency,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            retries=retries,
+            on_done=on_done,
+        )
 
     async def get_health(self, deployment_id: str) -> HealthStatus:
         deployment = self._store.get_deployment(deployment_id)

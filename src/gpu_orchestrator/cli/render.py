@@ -9,8 +9,14 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ..core.batch import BatchResult
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -220,6 +226,18 @@ def costs_table(records: list[CostRecord]) -> None:
     table.add_section()
     table.add_row("[b]TOTAL[/b]", "", f"[b]{total:.4f}[/b]", "", "")
     console.print(table)
+
+
+def batch_summary(results: list[BatchResult], out: Path) -> None:
+    ok = [r for r in results if r.error is None]
+    failed = [r for r in results if r.error is not None]
+    tokens = sum(r.prompt_tokens + r.completion_tokens for r in ok)
+    line = f"[b]{len(ok)}[/b]/{len(results)} succeeded"
+    if failed:
+        line += f", [red]{len(failed)} failed[/red]"
+    console.print(f"{line} · {tokens:,} tokens · results -> [b]{out}[/b]")
+    if failed:
+        console.print(f"[dim]first error: {escape(failed[0].error or '')[:120]}[/dim]")
 
 
 def usage_table(summaries: list[UsageSummary]) -> None:
