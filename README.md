@@ -9,8 +9,9 @@ The product is the orchestration layer, not the provider: two seams (Provider, R
 driven by a reconcile loop comparing desired vs observed state, so interruption and crash recovery
 are free, and the cost-safety invariant (no orphaned pods burning money) holds by construction.
 
-> Status: beta. The engine is validated against real RunPod (deploy, kill-and-recover, crash-resume,
-> orphan sweep, concurrent deploys, runtime-crash cap). Single provider and the §18 24h soak
+> Status: v0.3.0 on PyPI, beta. The engine is validated against real RunPod (deploy,
+> kill-and-recover, crash-resume, orphan sweep, concurrent deploys, runtime-crash cap), and drives
+> from the CLI, REST API, MCP server, or the visual workbench. Single provider and the §18 24h soak
 > remain. See [What's not done](#whats-not-done).
 
 ## Quickstart
