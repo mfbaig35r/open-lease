@@ -1,6 +1,6 @@
 [project]
 name = "open-lease"
-version = "0.2.0"
+version = "0.3.0"
 description = "Make GPU infrastructure programmable: provision GPUs, deploy open-source LLMs, serve OpenAI-compatible inference."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -6,6 +6,8 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-18
+
 ### Added
 - Opt-in cross-origin for a hosted workbench: `gpu serve --cors-origin <origin>` (repeatable, or
   `GPU_ORCH_CORS_ORIGINS`) lets a UI at that exact origin call the API, including the Private Network

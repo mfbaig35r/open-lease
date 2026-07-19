@@ -10,8 +10,8 @@ driven by a reconcile loop comparing desired vs observed state, so interruption 
 are free, and the cost-safety invariant (no orphaned pods burning money) holds by construction.
 
 > Status: beta. The engine is validated against real RunPod (deploy, kill-and-recover, crash-resume,
-> orphan sweep, concurrent deploys, runtime-crash cap). Not yet on PyPI, single provider, and the
-> §18 24h soak remains. See [What's not done](#whats-not-done).
+> orphan sweep, concurrent deploys, runtime-crash cap). Single provider and the §18 24h soak
+> remain. See [What's not done](#whats-not-done).
 
 ## Quickstart
 
