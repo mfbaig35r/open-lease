@@ -1,6 +1,6 @@
 """The daemon: the owner that outlives a single CLI command (loop ownership = daemon, CLAUDE.md).
 
-It runs three periodic loops over the shared store, each built on a callable core so the loops are
+It runs five periodic loops over the shared store, each built on a callable core so the loops are
 thin and the cores stay unit-testable:
 
 - reconcile (every ``reconcile_interval``): ``reconcile_once`` on each active deployment.
@@ -9,6 +9,8 @@ thin and the cores stay unit-testable:
   install's namespace that no active deployment owns, upgrading the cost-safety invariant from
   per-deployment to global-within-namespace (spec §7.5). A grace period avoids racing an in-flight
   create.
+- costs (hourly): ``cost_snapshot`` per active deployment (spec §11).
+- retention (hourly): prune events older than ``event_retention_days`` so the log stays bounded.
 
 ``tick_*`` run one pass and are what the tests drive; ``run`` wires them into sleeping loops.
 Phase 1 is single-process (spec §7.4): no distributed locking.
