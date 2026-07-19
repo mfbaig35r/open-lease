@@ -143,6 +143,9 @@ def deploy(
     ),
     image: str | None = typer.Option(None, "--image", help="Ad-hoc: vLLM image."),
     disk: int | None = typer.Option(None, "--disk", help="Ad-hoc: container disk GB."),
+    gpus: int = typer.Option(
+        1, "--gpus", help="Ad-hoc: GPUs per pod for tensor parallelism (a big model needs >1)."
+    ),
     wait: bool = typer.Option(False, "--wait", help="Block until READY or FAILED."),
     chat: bool = typer.Option(False, "--chat", help="Wait for READY, then open a chat REPL."),
     set_: list[str] | None = typer.Option(None, "--set", help="Override key=value (repeatable)."),
@@ -167,6 +170,7 @@ def deploy(
                 context_window=context or 0,
                 image=image,
                 disk_gb=disk,
+                gpu_count=gpus,
                 wait=wait,
                 overrides=_overrides(set_),
             )

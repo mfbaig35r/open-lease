@@ -118,18 +118,21 @@ class Orchestrator:
         context_window: int = 0,
         image: str | None = None,
         disk_gb: int | None = None,
+        gpu_count: int = 1,
         wait: bool = False,
         overrides: RuntimeOverrides | None = None,
     ) -> Deployment:
         """Deploy any vLLM-servable HF repo with no catalog entry. The engine is model-neutral; the
         catalog only supplies tuned recipes. ``--gpu`` is required (no recommended GPU to fall back
-        on); ``context_window`` 0 lets vLLM auto-detect. The deployment carries its own hf_repo, so
-        reconcile and the proxy need no catalog lookup."""
+        on); ``context_window`` 0 lets vLLM auto-detect. ``gpu_count`` > 1 provisions a multi-GPU
+        pod and shards vLLM across it (tensor parallelism). The deployment carries its own hf_repo,
+        so reconcile and the proxy need no catalog lookup."""
         img = image or _ADHOC_IMAGE
         profile = RuntimeProfile(
             model_id=_adhoc_model_id(hf_repo),
             image=img,
             recommended_gpu=gpu,
+            tensor_parallel=gpu_count,
             min_disk_gb=disk_gb or _ADHOC_DISK_GB,
             validation=ValidationMetadata(
                 validated_at="",

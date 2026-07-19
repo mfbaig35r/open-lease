@@ -12,6 +12,8 @@ All notable changes to open-lease are documented here. The format follows
   driven from `tensor_parallel`, the RunPod provider requests it (was hardcoded to 1), and cost
   accrues at the per-GPU rate times the count; `gpu status` shows `Nx <gpu>`. Single-pod only
   (NVLink/PCIe tensor parallelism); multi-node is out of scope.
+- `gpu deploy --hf-repo <repo> --gpus N` requests a multi-GPU pod for an ad-hoc deploy, so a large
+  model can be tensor-parallel without a catalog entry.
 
 ## [0.3.0] - 2026-07-18
 
