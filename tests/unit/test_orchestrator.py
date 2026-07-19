@@ -77,6 +77,16 @@ async def test_deploy_adhoc_no_catalog_entry_reaches_ready(tmp_path):
     assert "qwen3-14b" not in {m.id for m in orch.list_models()}  # genuinely off-catalog
 
 
+async def test_deploy_adhoc_gpus_sets_tensor_parallel_and_provisions_multi_gpu(tmp_path):
+    # --gpus N on an ad-hoc deploy provisions an N-GPU pod (tensor parallelism).
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_adhoc(
+        hf_repo="Qwen/Qwen3-235B", gpu="MOCK-GPU", provider="mock", gpu_count=4, wait=True
+    )
+    assert dep.profile.tensor_parallel == 4
+    assert dep.instance is not None and dep.instance.gpu_count == 4
+
+
 async def test_stop_deployment(tmp_path):
     orch = _orch(tmp_path)
     dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
