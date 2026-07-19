@@ -20,6 +20,7 @@ from typing import TypeVar
 import typer
 
 from ..config import Config
+from ..core import batch as batchlib  # aliased: the `batch` command below would shadow the module
 from ..core.orchestrator import Orchestrator
 from ..errors import OrchestratorError
 from ..logging import configure_logging
@@ -606,6 +607,67 @@ def _run_chat(orch: Orchestrator, dep) -> None:
             continue
         messages.append({"role": "assistant", "content": reply.get("content") or ""})
         render.console.print(f"[green]{dep.model_id}[/green]: {reply.get('content') or ''}")
+
+
+@app.command()
+def batch(
+    deployment_id: str = typer.Argument(..., help="A READY deployment id."),
+    input_file: Path = typer.Argument(..., help="JSONL of prompts (one request per line)."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Results JSONL (default: <input>.results.jsonl)."
+    ),
+    concurrency: int = typer.Option(64, "--concurrency", help="Max requests in flight."),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    temperature: float | None = typer.Option(None, "--temperature"),
+    retries: int = typer.Option(3, "--retries", help="Retries per item on a transient error."),
+    system: str | None = typer.Option(
+        None, "--system", help="System prompt prepended to each item."
+    ),
+) -> None:
+    """Fan a JSONL of prompts out over a READY deployment with bounded concurrency and retries,
+    writing one result line per input. Throughput-bound: the cheap way to parse thousands of
+    documents. Metered, so the run shows up in `gpu usage`."""
+    orch = _orchestrator()
+    if not input_file.is_file():
+        _fail_msg(f"input file not found: {input_file}")
+    items = batchlib.load_items(input_file, system=system)
+    if not items:
+        _fail_msg(f"no prompts found in {input_file}")
+    results = _batch_run(orch, deployment_id, items, concurrency, max_tokens, temperature, retries)
+    out = output or input_file.with_suffix(".results.jsonl")
+    batchlib.write_results(out, results)
+    render.batch_summary(results, out)
+
+
+def _batch_run(orch, deployment_id, items, concurrency, max_tokens, temperature, retries):
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        TextColumn,
+        TimeRemainingColumn,
+    )
+
+    with Progress(
+        TextColumn("[b]batch[/b]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+        console=render.console,
+    ) as prog:
+        task = prog.add_task("run", total=len(items))
+        return _call(
+            _run,
+            orch.run_batch(
+                deployment_id,
+                items,
+                concurrency=concurrency,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                retries=retries,
+                on_done=lambda _: prog.advance(task),
+            ),
+        )
 
 
 # --- combined lifecycle ---------------------------------------------------------------
