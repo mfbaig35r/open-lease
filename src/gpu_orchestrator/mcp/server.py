@@ -109,6 +109,12 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
         return [c.model_dump(mode="json") for c in orchestrator.get_costs(deployment_id)]
 
     @mcp.tool
+    def get_usage(deployment_id: str | None = None) -> list[dict]:
+        """Token throughput and cost-per-token per deployment: requests, tokens, tokens/sec
+        (utilization), accrued cost, and $/million-tokens (the crossover vs per-token API)."""
+        return [u.model_dump(mode="json") for u in orchestrator.get_usage(deployment_id)]
+
+    @mcp.tool
     async def chat_completion(model: str, messages: list[dict]) -> dict:
         """Chat with a READY deployment. ``model`` is the catalog id or the HF repo; ``messages`` is
         the OpenAI chat format. Routes to the matching deployment's endpoint."""

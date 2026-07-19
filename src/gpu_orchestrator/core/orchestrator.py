@@ -35,13 +35,14 @@ from ..models import (
     ProviderInfo,
     RuntimeOverrides,
     RuntimeProfile,
+    UsageSummary,
     ValidationMetadata,
     VolumeInfo,
 )
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
-from . import health
+from . import health, usage
 from .catalog import Catalog, load_catalog
 from .reconciler import reconcile_once
 
@@ -225,6 +226,19 @@ class Orchestrator:
 
     def get_costs(self, deployment_id: str | None = None) -> list[CostRecord]:
         return self._store.get_cost_records(deployment_id)
+
+    def record_proxy_usage(self, deployment_id: str, body: bytes) -> None:
+        """Tally tokens for a forwarded proxy response (spec §11). Called by the OpenAI proxy on a
+        successful metered response; a no-op when the body carries no usage."""
+        usage.record(self._store, deployment_id, body)
+
+    def get_usage(self, deployment_id: str | None = None) -> list[UsageSummary]:
+        """Per-deployment token throughput + cost-per-token. Includes stopped deployments, so a
+        torn-down deployment's totals stay visible after the fact."""
+        deployments = self._store.list_deployments(include_stopped=True)
+        if deployment_id is not None:
+            deployments = [d for d in deployments if d.id == deployment_id]
+        return [usage.summary(self._store, d) for d in deployments]
 
     async def get_health(self, deployment_id: str) -> HealthStatus:
         deployment = self._store.get_deployment(deployment_id)

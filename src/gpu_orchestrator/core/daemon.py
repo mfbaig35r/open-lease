@@ -116,9 +116,9 @@ class Daemon:
         """Prune events older than the retention window, so the append-only log stays bounded."""
         now = now or _utcnow()
         cutoff = now - timedelta(days=self._config.event_retention_days)
-        removed = self._store.prune_events(cutoff)
+        removed = self._store.prune_events(cutoff) + self._store.prune_usage(cutoff)
         if removed:
-            _log.info("pruned old events", extra={"removed": removed})
+            _log.info("pruned old records", extra={"removed": removed})
         return removed
 
     # --- the long-running loop ------------------------------------------------------

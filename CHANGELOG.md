@@ -14,6 +14,10 @@ All notable changes to open-lease are documented here. The format follows
   (NVLink/PCIe tensor parallelism); multi-node is out of scope.
 - `gpu deploy --hf-repo <repo> --gpus N` requests a multi-GPU pod for an ad-hoc deploy, so a large
   model can be tensor-parallel without a catalog entry.
+- Token-usage metering. The OpenAI proxy tallies tokens per deployment, and `gpu usage` (plus
+  `GET /usage` and the `get_usage` MCP tool) reports requests, tokens, tokens/sec (utilization),
+  accrued cost, and $/million-tokens, the crossover metric against per-token API pricing. Metering
+  runs in the background so forwarding stays byte-for-byte; usage is pruned with events on retention.
 
 ## [0.3.0] - 2026-07-18
 

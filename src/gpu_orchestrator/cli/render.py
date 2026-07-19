@@ -24,6 +24,7 @@ from ..models import (
     HealthStatus,
     ModelSpec,
     ProviderInfo,
+    UsageSummary,
     VolumeInfo,
 )
 
@@ -218,6 +219,27 @@ def costs_table(records: list[CostRecord]) -> None:
         )
     table.add_section()
     table.add_row("[b]TOTAL[/b]", "", f"[b]{total:.4f}[/b]", "", "")
+    console.print(table)
+
+
+def usage_table(summaries: list[UsageSummary]) -> None:
+    active = [s for s in summaries if s.requests > 0]
+    if not active:
+        console.print("[dim]No token usage yet (drive some requests through the proxy).[/dim]")
+        return
+    table = Table(title="Token usage + cost per model")
+    for col in ("DEPLOYMENT", "MODEL", "REQS", "TOKENS", "TOK/S", "ACCRUED $", "$/M TOK"):
+        table.add_column(col)
+    for s in active:
+        table.add_row(
+            s.deployment_id,
+            s.model_id,
+            str(s.requests),
+            f"{s.total_tokens:,}",
+            f"{s.tokens_per_sec:.1f}",
+            f"{s.accrued_usd:.4f}",
+            "-" if s.cost_per_mtok is None else f"{s.cost_per_mtok:.2f}",
+        )
     console.print(table)
 
 

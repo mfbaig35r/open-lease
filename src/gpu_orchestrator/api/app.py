@@ -31,6 +31,7 @@ from ..models import (
     ModelSpec,
     ProviderInfo,
     RuntimeOverrides,
+    UsageSummary,
     VolumeInfo,
 )
 
@@ -145,6 +146,10 @@ def create_app(
     def costs(deployment_id: str | None = None) -> list[CostRecord]:
         return orchestrator.get_costs(deployment_id)
 
+    @app.get("/usage")
+    def usage(deployment_id: str | None = None) -> list[UsageSummary]:
+        return orchestrator.get_usage(deployment_id)
+
     @app.get("/volumes")
     async def volumes() -> list[VolumeInfo]:
         return await orchestrator.list_volumes()
@@ -182,6 +187,7 @@ _API_PREFIXES = (
     "/providers",
     "/availability",
     "/costs",
+    "/usage",
     "/volumes",
     "/estimate",
     "/v1",

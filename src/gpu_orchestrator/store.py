@@ -60,6 +60,19 @@ _MIGRATIONS: list[str] = [
         acquired_at TEXT NOT NULL
     );
     """,
+    # v3: token-usage metering. The OpenAI proxy tallies each metered response here; aggregated for
+    # `gpu usage` (utilization + cost-per-token) and pruned with events on retention.
+    """
+    CREATE TABLE usage_records (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        deployment_id     TEXT NOT NULL,
+        prompt_tokens     INTEGER NOT NULL,
+        completion_tokens INTEGER NOT NULL,
+        at                TEXT NOT NULL
+    );
+    CREATE INDEX idx_usage_deployment ON usage_records(deployment_id);
+    CREATE INDEX idx_usage_at ON usage_records(at);
+    """,
 ]
 
 # --- Payload upgraders (own JSON payload only) ---------------------------------------
@@ -270,6 +283,29 @@ class Store:
             )
             self._conn.commit()
 
+    # --- token usage ----------------------------------------------------------------
+
+    def save_usage_record(
+        self, deployment_id: str, prompt_tokens: int, completion_tokens: int, at: datetime
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO usage_records (deployment_id, prompt_tokens, completion_tokens, at) "
+                "VALUES (?, ?, ?, ?)",
+                (deployment_id, prompt_tokens, completion_tokens, at.isoformat()),
+            )
+            self._conn.commit()
+
+    def get_usage_totals(self, deployment_id: str) -> tuple[int, int, int]:
+        """(requests, prompt_tokens, completion_tokens) summed for a deployment; zeros if none."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), "
+                "COALESCE(SUM(completion_tokens), 0) FROM usage_records WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+        return int(row[0]), int(row[1]), int(row[2])
+
     # --- retention ------------------------------------------------------------------
 
     def prune_events(self, before: datetime) -> int:
@@ -277,5 +313,14 @@ class Store:
         append-only and otherwise grows unbounded under a long-running daemon."""
         with self._lock:
             cursor = self._conn.execute("DELETE FROM events WHERE at < ?", (before.isoformat(),))
+            self._conn.commit()
+            return cursor.rowcount
+
+    def prune_usage(self, before: datetime) -> int:
+        """Delete usage records older than ``before``; returns how many were removed."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM usage_records WHERE at < ?", (before.isoformat(),)
+            )
             self._conn.commit()
             return cursor.rowcount

@@ -26,6 +26,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from ..core import usage
+
 if TYPE_CHECKING:
     from ..core.orchestrator import Orchestrator
 
@@ -130,17 +132,38 @@ async def _forward(
 
     headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
     headers["x-gpu-orch-deployment-id"] = deployment_id
+    # Meter successful token endpoints: tee the raw bytes into a buffer (forwarding is unchanged),
+    # then tally usage in the background after the stream drains. Non-metered paths pass straight.
+    metered = upstream.status_code == 200 and usage.is_metered(request.url.path)
+    buf: list[bytes] = []
+    stream = _tee(upstream.aiter_raw(), buf) if metered else upstream.aiter_raw()
     return StreamingResponse(
-        upstream.aiter_raw(),
+        stream,
         status_code=upstream.status_code,
         headers=headers,
-        background=BackgroundTask(_aclose, upstream, client),
+        background=BackgroundTask(
+            _finish, upstream, client, orchestrator if metered else None, deployment_id, buf
+        ),
     )
 
 
-async def _aclose(upstream: httpx.Response, client: httpx.AsyncClient) -> None:
+async def _tee(source, sink: list[bytes]):
+    async for chunk in source:
+        sink.append(chunk)
+        yield chunk
+
+
+async def _finish(
+    upstream: httpx.Response,
+    client: httpx.AsyncClient,
+    orchestrator: Orchestrator | None,
+    deployment_id: str,
+    buf: list[bytes],
+) -> None:
     await upstream.aclose()
     await client.aclose()
+    if orchestrator is not None and buf:
+        orchestrator.record_proxy_usage(deployment_id, b"".join(buf))
 
 
 def _parse(body: bytes) -> dict | None:

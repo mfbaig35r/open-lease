@@ -30,7 +30,11 @@ def _upstream() -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/chat/completions":
             body = json.dumps(
-                {"id": "cmpl-1", "choices": [{"message": {"content": "hi"}}]}
+                {
+                    "id": "cmpl-1",
+                    "choices": [{"message": {"content": "hi"}}],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+                }
             ).encode()
             return httpx.Response(
                 200,
@@ -81,6 +85,23 @@ def test_routes_by_catalog_id(tmp_path):
     assert resp.json()["choices"][0]["message"]["content"] == "hi"
     assert resp.headers["x-gpu-orch-deployment-id"] == "dep-p1"
     assert resp.headers["x-upstream"] == "vllm"  # upstream headers preserved
+
+
+def test_meters_token_usage_on_success(tmp_path):
+    # A forwarded chat completion is metered: the background task tallies the response's usage to
+    # the routed deployment, without changing the bytes the client received.
+    client = _client(tmp_path)
+    resp = client.post("/v1/chat/completions", json={"model": "qwen3-0.6b", "messages": []})
+    assert resp.status_code == 200
+    assert resp.json()["usage"]["total_tokens"] == 20  # forwarding still intact
+    assert Store(tmp_path / "proxy.db").get_usage_totals("dep-p1") == (1, 12, 8)
+
+
+def test_does_not_meter_unrouted_requests(tmp_path):
+    client = _client(tmp_path)
+    resp = client.post("/v1/chat/completions", json={"model": "nope", "messages": []})
+    assert resp.status_code == 404
+    assert Store(tmp_path / "proxy.db").get_usage_totals("dep-p1") == (0, 0, 0)
 
 
 def test_routes_by_hf_repo(tmp_path):
