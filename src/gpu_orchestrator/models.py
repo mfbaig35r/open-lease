@@ -92,6 +92,24 @@ class Posture(StrEnum):
     OFF = "off"
 
 
+class BudgetWindow(StrEnum):
+    """The recurring period a spend ceiling resets over (capacity plan, Tier A2)."""
+
+    DAILY = "daily"
+    MONTHLY = "monthly"
+
+
+class BudgetAction(StrEnum):
+    """What happens when a budget's ceiling is reached (Tier A2). ``warn`` only emits an event;
+    ``stop`` tears down the in-scope deployment(s) for the rest of the window (a budget stop
+    outranks a schedule); ``block_new`` refuses new deploys in scope while over budget but leaves
+    running work alone."""
+
+    WARN = "warn"
+    STOP = "stop"
+    BLOCK_NEW = "block_new"
+
+
 class EventKind(StrEnum):
     DEPLOYMENT_REQUESTED = "deployment_requested"
     INSTANCE_CREATED = "instance_created"
@@ -110,6 +128,9 @@ class EventKind(StrEnum):
     ORPHAN_DETECTED = "orphan_detected"
     ORPHAN_DESTROYED = "orphan_destroyed"
     COST_SNAPSHOT = "cost_snapshot"
+    BUDGET_WARNING = "budget_warning"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    BUDGET_RELEASED = "budget_released"
 
 
 # =====================================================================================
@@ -365,6 +386,10 @@ class Deployment(BaseModel):
     # each tick and drives ``desired_state`` to match, so capacity follows a plan (business hours,
     # overnight shutdown) rather than a variable meter. None = manual control (deploy/stop own it).
     schedule: Schedule | None = None
+    # Held down by an exceeded stop-budget (Tier A2). Set by the daemon's budget loop; takes
+    # precedence over the schedule (a ceiling outranks a plan), so a held deployment stays STOPPED
+    # even inside an ON window. Cleared when the budget window resets or the budget is lifted.
+    budget_hold: bool = False
     # Count of unexpected runtime deaths (a created pod that vanished before reaching READY, e.g. an
     # OOM crash loop) since the last healthy READY. Distinct from ``failure.attempts``, which counts
     # only provider CREATE errors: a successful create clears ``failure`` next tick, so it can never
@@ -395,6 +420,36 @@ class HealthStatus(BaseModel):
 # =====================================================================================
 # Cost + event types (spec §6, §11, §12)
 # =====================================================================================
+
+
+class Budget(BaseModel):
+    """A spend ceiling over a recurring window (capacity plan, Tier A2). ``deployment_id`` None
+    makes it account-wide (every deployment's cost); a value scopes it to one deployment. Spend is
+    computed from ``CostRecord`` data (GPU time), so a budget is a policy layer with no new
+    accounting. Window boundaries are UTC in Phase 1. ``on_exceed`` decides enforcement;
+    ``warn_fraction`` is the soft threshold that emits an early warning event."""
+
+    schema_version: int = SCHEMA_VERSION
+    id: str  # short, human-friendly: "bud-a1b2c3"
+    deployment_id: str | None = None  # None = account-wide
+    window: BudgetWindow
+    limit_usd: float
+    on_exceed: BudgetAction = BudgetAction.WARN
+    warn_fraction: float = 0.8
+
+    @field_validator("limit_usd")
+    @classmethod
+    def _positive_limit(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("limit_usd must be greater than 0")
+        return v
+
+    @field_validator("warn_fraction")
+    @classmethod
+    def _fraction_range(cls, v: float) -> float:
+        if not 0 < v <= 1:
+            raise ValueError("warn_fraction must be in (0, 1]")
+        return v
 
 
 class CostRecord(BaseModel):

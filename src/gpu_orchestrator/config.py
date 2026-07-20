@@ -97,6 +97,7 @@ class Config(BaseSettings):
     orphan_grace_period: int = 120
     health_poll_interval: int = 30
     health_failure_threshold: int = 3
+    budget_poll_interval: int = 300  # how often the daemon evaluates spend ceilings (Tier A2)
 
     # --- retry / backoff ------------------------------------------------------------
     retry_max_attempts: int = 3

@@ -61,6 +61,11 @@ class ReconcileError(OrchestratorError):
     """The reconciler could not make progress for a reason that is not a provider/runtime fault."""
 
 
+class BudgetExceededError(OrchestratorError):
+    """A new deploy was refused because an account budget with ``on_exceed=block_new`` is over its
+    ceiling for the current window (capacity plan, Tier A2)."""
+
+
 class TimeoutBudgetExceeded(OrchestratorError):
     """A deployment stage ran past its configured budget (spec §7.3)."""
 

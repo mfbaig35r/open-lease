@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from gpu_orchestrator.errors import DeploymentNotFoundError, SchemaVersionError
-from gpu_orchestrator.models import CostRecord, DeploymentState
+from gpu_orchestrator.models import Budget, BudgetWindow, CostRecord, DeploymentState
 from gpu_orchestrator.store import _MIGRATIONS, Store
 from tests.fixtures.deployments import make_deployment
 from tests.fixtures.events import ALL_EVENTS
@@ -100,6 +100,17 @@ def test_cost_record_roundtrip(store):
     store.save_cost_record(rec)
     out = store.get_cost_records("dep-cost")
     assert out == [rec]
+
+
+def test_budget_roundtrip_and_delete(store):
+    budget = Budget(id="bud-1", window=BudgetWindow.DAILY, limit_usd=50.0, on_exceed="stop")
+    store.save_budget(budget)
+    (loaded,) = store.list_budgets()
+    assert loaded == budget
+    assert loaded.schema_version == budget.schema_version  # persisted models carry the version
+    assert store.delete_budget("bud-1") is True
+    assert store.list_budgets() == []
+    assert store.delete_budget("bud-1") is False  # already gone
 
 
 def test_unknown_schema_version_fails_loudly(store, tmp_path):

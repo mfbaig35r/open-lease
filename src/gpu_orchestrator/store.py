@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .errors import DeploymentNotFoundError, SchemaVersionError
-from .models import SCHEMA_VERSION, CostRecord, Deployment, Event
+from .models import SCHEMA_VERSION, Budget, CostRecord, Deployment, Event
 
 # --- DDL migrations (own table/column shape only) ------------------------------------
 
@@ -72,6 +72,16 @@ _MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_usage_deployment ON usage_records(deployment_id);
     CREATE INDEX idx_usage_at ON usage_records(at);
+    """,
+    # v4: spend ceilings (capacity plan, Tier A2). A budget is a policy over existing cost_records;
+    # deployment_id NULL is an account-wide budget. The daemon evaluates these each tick.
+    """
+    CREATE TABLE budgets (
+        id            TEXT PRIMARY KEY,
+        deployment_id TEXT,
+        doc           TEXT NOT NULL
+    );
+    CREATE INDEX idx_budgets_deployment ON budgets(deployment_id);
     """,
 ]
 
@@ -246,6 +256,34 @@ class Store:
             CostRecord.model_validate(_migrate_document("CostRecord", json.loads(r["doc"])))
             for r in rows
         ]
+
+    # --- budgets (spend ceilings, Tier A2) ------------------------------------------
+
+    def save_budget(self, budget: Budget) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO budgets (id, deployment_id, doc) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    deployment_id = excluded.deployment_id, doc = excluded.doc
+                """,
+                (budget.id, budget.deployment_id, budget.model_dump_json()),
+            )
+            self._conn.commit()
+
+    def list_budgets(self) -> list[Budget]:
+        with self._lock:
+            rows = self._conn.execute("SELECT doc FROM budgets ORDER BY id").fetchall()
+        return [
+            Budget.model_validate(_migrate_document("Budget", json.loads(r["doc"]))) for r in rows
+        ]
+
+    def delete_budget(self, budget_id: str) -> bool:
+        """Delete a budget; returns True if one was removed."""
+        with self._lock:
+            cursor = self._conn.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
+            self._conn.commit()
+            return cursor.rowcount > 0
 
     # --- download locks (cache-write coordination, §14) -----------------------------
 

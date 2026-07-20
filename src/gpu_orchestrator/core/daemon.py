@@ -26,10 +26,10 @@ from ..config import Config
 from ..errors import OrchestratorError
 from ..events import EventLog
 from ..logging import get_logger
-from ..models import Deployment, DeploymentState, Event, EventKind, _utcnow
+from ..models import BudgetAction, Deployment, DeploymentState, Event, EventKind, _utcnow
 from ..providers.base import Provider
 from ..store import Store
-from . import costs, schedule
+from . import budgets, costs, schedule
 from .catalog import Catalog, load_catalog
 from .health import HealthMonitor
 from .orchestrator import build_provider, build_runtime
@@ -60,13 +60,16 @@ class Daemon:
         self._injected_runtime = runtime
         self._monitor = HealthMonitor(self._config)
         self._orphan_seen: dict[str, datetime] = {}
+        # Per-budget (window_start, phase) so a warning/exceeded event fires once per escalation,
+        # not every tick. Reset when the window rolls over (Tier A2).
+        self._budget_phase: dict[str, tuple[str, str]] = {}
 
     # --- one pass of each loop (the testable cores) ---------------------------------
 
     async def tick_reconcile(self, now: datetime | None = None) -> None:
         now = now or _utcnow()
         for deployment in self._reconcilable(now):
-            self._apply_schedule(deployment, now)
+            self._apply_policy(deployment, now)
             await reconcile_once(
                 deployment,
                 provider=self._provider(deployment.provider),
@@ -87,19 +90,24 @@ class Daemon:
         for d in self._store.list_deployments(include_stopped=True):
             if d.observed_state != DeploymentState.STOPPED:
                 out[d.id] = d
-            elif d.schedule is not None and (
-                schedule.resolve_desired_state(d, now) != DeploymentState.STOPPED
+            elif (
+                d.schedule is not None
+                and not d.budget_hold  # a budget hold outranks the schedule: do not wake it
+                and schedule.resolve_desired_state(d, now) != DeploymentState.STOPPED
             ):
                 out[d.id] = d
         return list(out.values())
 
-    def _apply_schedule(self, deployment: Deployment, now: datetime) -> None:
-        """Drive a scheduled deployment's desired_state to the posture in force now. The schedule is
-        authoritative: it overrides a manual stop or start, so remove the schedule for manual
-        control. A no-op when nothing changes, so a settled deployment is left untouched."""
-        if deployment.schedule is None:
+    def _apply_policy(self, deployment: Deployment, now: datetime) -> None:
+        """Resolve the desired_state a deployment should hold now, by precedence: an exceeded
+        stop-budget (STOPPED) outranks the schedule, which outranks manual control. A no-op when
+        nothing changes, so a settled deployment is left untouched."""
+        if deployment.budget_hold:
+            desired = DeploymentState.STOPPED
+        elif deployment.schedule is not None:
+            desired = schedule.resolve_desired_state(deployment, now)
+        else:
             return
-        desired = schedule.resolve_desired_state(deployment, now)
         if desired == deployment.desired_state:
             return
         deployment.desired_state = desired
@@ -110,7 +118,7 @@ class Daemon:
                 correlation_id=deployment.id,
                 deployment_id=deployment.id,
                 kind=EventKind.RECONCILE_ACTION,
-                payload={"action": "schedule_posture", "desired_state": desired.value},
+                payload={"action": "policy_desired", "desired_state": desired.value},
             )
         )
 
@@ -159,6 +167,82 @@ class Daemon:
             _log.info("pruned old records", extra={"removed": removed})
         return removed
 
+    async def tick_budget(self, now: datetime | None = None) -> None:
+        """Evaluate every spend ceiling against the cost accrued this window (Tier A2): emit a
+        warning/exceeded event on escalation, then reconcile the stop-holds so an exceeded
+        stop-budget forces its scope down (and a fresh window releases it)."""
+        now = now or _utcnow()
+        statuses = [
+            budgets.evaluate(b, self._store.get_cost_records(b.deployment_id), now)
+            for b in self._store.list_budgets()
+        ]
+        for status in statuses:
+            self._emit_budget_transition(status, now)
+        self._reconcile_budget_holds(statuses)
+
+    def _emit_budget_transition(self, status: budgets.BudgetStatus, now: datetime) -> None:
+        phase = "exceeded" if status.exceeded else "warn" if status.over_warn else "ok"
+        window = budgets.window_start(status.budget.window, now).isoformat()
+        prev_window, prev_phase = self._budget_phase.get(status.budget.id, ("", "ok"))
+        if window != prev_window:
+            prev_phase = "ok"  # a new window starts fresh
+        rank = {"ok": 0, "warn": 1, "exceeded": 2}
+        if rank[phase] > rank[prev_phase]:
+            kind = EventKind.BUDGET_EXCEEDED if status.exceeded else EventKind.BUDGET_WARNING
+            self._emit_budget(kind, status)
+        self._budget_phase[status.budget.id] = (window, phase)
+
+    def _reconcile_budget_holds(self, statuses: list[budgets.BudgetStatus]) -> None:
+        """Set budget_hold on every deployment an exceeded stop-budget covers, clear it otherwise.
+        Derived fresh each tick, so a window rollover (spend back under the ceiling) releases the
+        hold. An account budget (deployment_id None) covers every deployment."""
+        deployments = self._store.list_deployments(include_stopped=True)
+        held: set[str] = set()
+        for status in statuses:
+            if not (status.exceeded and status.budget.on_exceed is BudgetAction.STOP):
+                continue
+            if status.budget.deployment_id is None:
+                held |= {d.id for d in deployments}
+            else:
+                held.add(status.budget.deployment_id)
+        for deployment in deployments:
+            should_hold = deployment.id in held
+            if should_hold and not deployment.budget_hold:
+                deployment.budget_hold = True
+                deployment.desired_state = DeploymentState.STOPPED
+                self._store.save_deployment(deployment)
+            elif not should_hold and deployment.budget_hold:
+                deployment.budget_hold = False
+                self._store.save_deployment(deployment)
+                self._emit_dep_event(deployment, EventKind.BUDGET_RELEASED, {})
+
+    def _emit_budget(self, kind: EventKind, status: budgets.BudgetStatus) -> None:
+        self._events.emit(
+            Event(
+                id=f"evt-{uuid4().hex[:12]}",
+                correlation_id=status.budget.id,
+                deployment_id=status.budget.deployment_id,
+                kind=kind,
+                payload={
+                    "budget": status.budget.id,
+                    "spent_usd": status.spent_usd,
+                    "limit_usd": status.budget.limit_usd,
+                    "fraction": status.fraction,
+                },
+            )
+        )
+
+    def _emit_dep_event(self, deployment: Deployment, kind: EventKind, payload: dict) -> None:
+        self._events.emit(
+            Event(
+                id=f"evt-{uuid4().hex[:12]}",
+                correlation_id=deployment.id,
+                deployment_id=deployment.id,
+                kind=kind,
+                payload=payload,
+            )
+        )
+
     # --- the long-running loop ------------------------------------------------------
 
     async def run(self) -> None:
@@ -170,6 +254,7 @@ class Daemon:
             self._loop(self.tick_sweep, self._config.orphan_sweep_interval),
             self._loop(self.tick_costs, 3600),  # cost_snapshot is hourly (§11)
             self._loop(self.tick_retention, 3600),  # prune old events hourly
+            self._loop(self.tick_budget, self._config.budget_poll_interval),  # spend ceilings (A2)
         )
 
     async def _loop(self, tick, interval: int) -> None:
