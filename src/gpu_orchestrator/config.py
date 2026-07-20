@@ -98,6 +98,9 @@ class Config(BaseSettings):
     health_poll_interval: int = 30
     health_failure_threshold: int = 3
     budget_poll_interval: int = 300  # how often the daemon evaluates spend ceilings (Tier A2)
+    autoscale_poll_interval: int = 60  # how often the daemon evaluates replica demand (Tier B2)
+    autoscale_window_seconds: int = 300  # request-rate lookback for the autoscale signal
+    autoscale_hysteresis_ticks: int = 2  # a new target must hold this many ticks before it applies
 
     # --- retry / backoff ------------------------------------------------------------
     retry_max_attempts: int = 3

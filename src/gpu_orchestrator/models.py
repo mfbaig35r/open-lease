@@ -14,7 +14,7 @@ from datetime import UTC, datetime, time
 from enum import StrEnum
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -131,6 +131,7 @@ class EventKind(StrEnum):
     BUDGET_WARNING = "budget_warning"
     BUDGET_EXCEEDED = "budget_exceeded"
     BUDGET_RELEASED = "budget_released"
+    AUTOSCALED = "autoscaled"
 
 
 # =====================================================================================
@@ -477,6 +478,41 @@ class Budget(BaseModel):
         if not 0 < v <= 1:
             raise ValueError("warn_fraction must be in (0, 1]")
         return v
+
+
+class AutoscalePolicy(BaseModel):
+    """Demand-driven replica scaling for a model (capacity plan, Tier B2). The daemon keeps the
+    number of deployments serving ``model_id`` between ``min_replicas`` and ``max_replicas`` so each
+    carries about ``target_rpm_per_replica`` requests per minute. The signal is served request rate
+    (from usage records), so it tracks sustained load; demand rejected at saturation (a 429) is not
+    visible, so set the target below a replica's ceiling. ``min_replicas`` stays >= 1 so there is
+    always a warm member to clone from."""
+
+    schema_version: int = SCHEMA_VERSION
+    model_id: str
+    min_replicas: int = 1
+    max_replicas: int
+    target_rpm_per_replica: float
+
+    @field_validator("min_replicas")
+    @classmethod
+    def _min_at_least_one(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("min_replicas must be at least 1 (scale-to-zero is not yet supported)")
+        return v
+
+    @field_validator("target_rpm_per_replica")
+    @classmethod
+    def _positive_target(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("target_rpm_per_replica must be greater than 0")
+        return v
+
+    @model_validator(mode="after")
+    def _max_ge_min(self) -> AutoscalePolicy:
+        if self.max_replicas < self.min_replicas:
+            raise ValueError("max_replicas must be >= min_replicas")
+        return self
 
 
 class CostRecord(BaseModel):

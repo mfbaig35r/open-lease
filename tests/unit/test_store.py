@@ -170,3 +170,26 @@ def test_prune_events(store):
     removed = store.prune_events(datetime(2026, 7, 4, tzinfo=UTC))
     assert removed == len(ALL_EVENTS)
     assert store.query_events() == []
+
+
+def test_autoscale_policy_roundtrip_and_recent_requests(store):
+    from datetime import UTC, datetime
+
+    from gpu_orchestrator.models import AutoscalePolicy
+
+    policy = AutoscalePolicy(
+        model_id="qwen3-0.6b", min_replicas=1, max_replicas=4, target_rpm_per_replica=30.0
+    )
+    store.save_autoscale_policy(policy)
+    (loaded,) = store.list_autoscale_policies()
+    assert loaded == policy and loaded.schema_version == policy.schema_version
+    assert store.delete_autoscale_policy("qwen3-0.6b") is True
+    assert store.list_autoscale_policies() == []
+
+    now = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
+    for _ in range(3):
+        store.save_usage_record("dep-a", 1, 1, now)
+    store.save_usage_record("dep-a", 1, 1, datetime(2026, 7, 6, 10, 0, tzinfo=UTC))  # older
+    since = datetime(2026, 7, 6, 11, 0, tzinfo=UTC)
+    assert store.count_recent_requests(["dep-a"], since) == 3  # the older one is excluded
+    assert store.count_recent_requests([], since) == 0

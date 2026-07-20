@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .errors import DeploymentNotFoundError, SchemaVersionError
-from .models import SCHEMA_VERSION, Budget, CostRecord, Deployment, Event
+from .models import SCHEMA_VERSION, AutoscalePolicy, Budget, CostRecord, Deployment, Event
 
 # --- DDL migrations (own table/column shape only) ------------------------------------
 
@@ -82,6 +82,14 @@ _MIGRATIONS: list[str] = [
         doc           TEXT NOT NULL
     );
     CREATE INDEX idx_budgets_deployment ON budgets(deployment_id);
+    """,
+    # v5: demand-driven autoscaling (capacity plan, Tier B2). One policy per model; the daemon
+    # adjusts the replica count from the served request rate in usage_records.
+    """
+    CREATE TABLE autoscale_policies (
+        model_id TEXT PRIMARY KEY,
+        doc      TEXT NOT NULL
+    );
     """,
 ]
 
@@ -343,6 +351,51 @@ class Store:
                 (deployment_id,),
             ).fetchone()
         return int(row[0]), int(row[1]), int(row[2])
+
+    def count_recent_requests(self, deployment_ids: list[str], since: datetime) -> int:
+        """How many metered requests these deployments served at or after ``since`` (the autoscale
+        demand signal, Tier B2). Zero for an empty id list."""
+        if not deployment_ids:
+            return 0
+        placeholders = ",".join("?" for _ in deployment_ids)
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM usage_records WHERE at >= ? AND deployment_id IN "
+                f"({placeholders})",
+                (since.isoformat(), *deployment_ids),
+            ).fetchone()
+        return int(row[0])
+
+    # --- autoscale policies (Tier B2) -----------------------------------------------
+
+    def save_autoscale_policy(self, policy: AutoscalePolicy) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO autoscale_policies (model_id, doc) VALUES (?, ?) "
+                "ON CONFLICT(model_id) DO UPDATE SET doc = excluded.doc",
+                (policy.model_id, policy.model_dump_json()),
+            )
+            self._conn.commit()
+
+    def list_autoscale_policies(self) -> list[AutoscalePolicy]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT doc FROM autoscale_policies ORDER BY model_id"
+            ).fetchall()
+        return [
+            AutoscalePolicy.model_validate(
+                _migrate_document("AutoscalePolicy", json.loads(r["doc"]))
+            )
+            for r in rows
+        ]
+
+    def delete_autoscale_policy(self, model_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM autoscale_policies WHERE model_id = ?", (model_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
 
     # --- retention ------------------------------------------------------------------
 

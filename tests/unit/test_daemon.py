@@ -12,6 +12,7 @@ from gpu_orchestrator.core.catalog import Catalog
 from gpu_orchestrator.core.daemon import Daemon
 from gpu_orchestrator.events import EventLog
 from gpu_orchestrator.models import (
+    AutoscalePolicy,
     Budget,
     BudgetWindow,
     CostRecord,
@@ -293,3 +294,105 @@ async def test_budget_hold_releases_when_no_longer_over(tmp_path):
 
     assert store.get_deployment("dep-d1").budget_hold is False
     assert any(e.kind is EventKind.BUDGET_RELEASED for e in events.query())
+
+
+def _autoscale_daemon(tmp_path, **cfg):
+    return _daemon(
+        tmp_path,
+        MockProvider(namespace="test"),
+        autoscale_window_seconds=60,
+        **cfg,
+    )
+
+
+def _policy(minimum=1, maximum=3, target=2.0):
+    return AutoscalePolicy(
+        model_id="qwen3-0.6b",
+        min_replicas=minimum,
+        max_replicas=maximum,
+        target_rpm_per_replica=target,
+    )
+
+
+async def test_autoscale_adds_replicas_under_load(tmp_path):
+    daemon, store, events = _autoscale_daemon(tmp_path, autoscale_hysteresis_ticks=1)
+    _seed(store, state=S.READY, endpoint="https://x")  # one member: dep-d1
+    store.save_autoscale_policy(_policy())
+    for _ in range(5):  # 5 requests in the last minute -> rpm 5 -> ceil(5/2)=3 (the cap)
+        store.save_usage_record("dep-d1", 10, 5, _IN_WINDOW)
+
+    await daemon.tick_autoscale(now=_IN_WINDOW)
+
+    members = [
+        d
+        for d in store.list_deployments()
+        if d.model_id == "qwen3-0.6b" and d.desired_state is not S.STOPPED
+    ]
+    assert len(members) == 3
+    assert any(e.kind is EventKind.AUTOSCALED for e in events.query())
+
+
+async def test_autoscale_removes_idle_replicas(tmp_path):
+    daemon, store, _ = _autoscale_daemon(tmp_path, autoscale_hysteresis_ticks=1)
+    for i in range(3):
+        store.save_deployment(
+            Deployment(
+                id=f"dep-r{i}",
+                model_id="qwen3-0.6b",
+                provider="mock",
+                desired_state=S.READY,
+                observed_state=S.READY,
+                profile=_PROFILE,
+                endpoint_url="https://x",
+                created_at=datetime(2026, 7, 6, 10 + i, 0, tzinfo=UTC),
+            )
+        )
+    store.save_autoscale_policy(_policy())
+
+    await daemon.tick_autoscale(now=_IN_WINDOW)  # no recent usage -> rpm 0 -> target = min 1
+
+    active = [
+        d
+        for d in store.list_deployments()
+        if d.model_id == "qwen3-0.6b" and d.desired_state is not S.STOPPED
+    ]
+    assert len(active) == 1  # scaled down to the floor, newest surplus stopped
+
+
+async def test_autoscale_waits_for_hysteresis(tmp_path):
+    daemon, store, _ = _autoscale_daemon(tmp_path, autoscale_hysteresis_ticks=2)
+    _seed(store, state=S.READY, endpoint="https://x")
+    store.save_autoscale_policy(_policy())
+    for _ in range(5):
+        store.save_usage_record("dep-d1", 10, 5, _IN_WINDOW)
+
+    def member_count():
+        return len(
+            [
+                d
+                for d in store.list_deployments()
+                if d.model_id == "qwen3-0.6b" and d.desired_state is not S.STOPPED
+            ]
+        )
+
+    await daemon.tick_autoscale(now=_IN_WINDOW)  # first tick at target=3, hysteresis needs 2
+    assert member_count() == 1
+    await daemon.tick_autoscale(now=_IN_WINDOW)  # second consecutive tick: acts
+    assert member_count() == 3
+
+
+async def test_autoscale_skips_scheduled_models(tmp_path):
+    daemon, store, _ = _autoscale_daemon(tmp_path, autoscale_hysteresis_ticks=1)
+    _seed(store, state=S.READY, endpoint="https://x", schedule=_BUSINESS)  # scheduled
+    store.save_autoscale_policy(_policy())
+    for _ in range(5):
+        store.save_usage_record("dep-d1", 10, 5, _IN_WINDOW)
+
+    await daemon.tick_autoscale(now=_IN_WINDOW)
+
+    members = [
+        d
+        for d in store.list_deployments()
+        if d.model_id == "qwen3-0.6b" and d.desired_state is not S.STOPPED
+    ]
+    assert len(members) == 1  # a schedule owns this model's lifecycle; autoscale leaves it alone

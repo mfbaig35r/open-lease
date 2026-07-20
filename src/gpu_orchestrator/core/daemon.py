@@ -29,7 +29,7 @@ from ..logging import get_logger
 from ..models import BudgetAction, Deployment, DeploymentState, Event, EventKind, _utcnow
 from ..providers.base import Provider
 from ..store import Store
-from . import budgets, costs, schedule
+from . import autoscale, budgets, costs, schedule
 from .catalog import Catalog, load_catalog
 from .health import HealthMonitor
 from .orchestrator import build_provider, build_runtime
@@ -63,6 +63,9 @@ class Daemon:
         # Per-budget (window_start, phase) so a warning/exceeded event fires once per escalation,
         # not every tick. Reset when the window rolls over (Tier A2).
         self._budget_phase: dict[str, tuple[str, str]] = {}
+        # Per-model (target, streak) for autoscale hysteresis: a new replica target must hold for
+        # ``autoscale_hysteresis_ticks`` before it is applied, so a noisy rate does not flap (B2).
+        self._autoscale_target: dict[str, tuple[int, int]] = {}
 
     # --- one pass of each loop (the testable cores) ---------------------------------
 
@@ -243,6 +246,61 @@ class Daemon:
             )
         )
 
+    async def tick_autoscale(self, now: datetime | None = None) -> None:
+        """Adjust each model's replica count to its served request rate (Tier B2). Declarative: it
+        creates replica records or marks surplus STOPPED, and the reconcile loop drives them. A
+        model whose deployments carry a schedule is skipped, since a schedule and an autoscaler
+        would fight over desired_state; use one or the other per model in this phase."""
+        now = now or _utcnow()
+        since = now - timedelta(seconds=self._config.autoscale_window_seconds)
+        window_minutes = self._config.autoscale_window_seconds / 60.0
+        for policy in self._store.list_autoscale_policies():
+            members = sorted(
+                (
+                    d
+                    for d in self._store.list_deployments(include_stopped=False)
+                    if d.model_id == policy.model_id and d.desired_state != DeploymentState.STOPPED
+                ),
+                key=lambda d: d.created_at,
+            )
+            if not members or any(m.schedule is not None for m in members):
+                continue  # nothing to clone from, or a schedule already owns this model's lifecycle
+            rpm = self._store.count_recent_requests([m.id for m in members], since) / window_minutes
+            target = autoscale.desired_replicas(rpm, policy)
+            if not self._autoscale_hold_elapsed(policy.model_id, target):
+                continue
+            if target > len(members):
+                self._autoscale_up(members, target - len(members))
+            elif target < len(members):
+                self._autoscale_down(members, len(members) - target)
+
+    def _autoscale_hold_elapsed(self, model_id: str, target: int) -> bool:
+        """Hysteresis: True once ``target`` has been the computed answer for enough consecutive
+        ticks to act on it, so a jittery rate does not add and remove replicas every minute."""
+        prev, streak = self._autoscale_target.get(model_id, (target, 0))
+        streak = streak + 1 if target == prev else 1
+        self._autoscale_target[model_id] = (target, streak)
+        return streak >= self._config.autoscale_hysteresis_ticks
+
+    def _autoscale_up(self, members: list[Deployment], count: int) -> None:
+        template = members[-1]  # newest member is the clone template
+        for _ in range(count):
+            clone = autoscale.replica_from(template, f"dep-{uuid4().hex[:6]}")
+            self._store.save_deployment(clone)
+            self._emit_dep_event(
+                clone, EventKind.AUTOSCALED, {"action": "scale_up", "model_id": clone.model_id}
+            )
+
+    def _autoscale_down(self, members: list[Deployment], count: int) -> None:
+        for surplus in members[-count:]:  # stop the newest surplus, keep the established replicas
+            surplus.desired_state = DeploymentState.STOPPED
+            self._store.save_deployment(surplus)
+            self._emit_dep_event(
+                surplus,
+                EventKind.AUTOSCALED,
+                {"action": "scale_down", "model_id": surplus.model_id},
+            )
+
     # --- the long-running loop ------------------------------------------------------
 
     async def run(self) -> None:
@@ -255,6 +313,7 @@ class Daemon:
             self._loop(self.tick_costs, 3600),  # cost_snapshot is hourly (§11)
             self._loop(self.tick_retention, 3600),  # prune old events hourly
             self._loop(self.tick_budget, self._config.budget_poll_interval),  # spend ceilings (A2)
+            self._loop(self.tick_autoscale, self._config.autoscale_poll_interval),  # replicas (B2)
         )
 
     async def _loop(self, tick, interval: int) -> None:

@@ -47,7 +47,7 @@ from ..models import (
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
-from . import batch, budgets, health, usage
+from . import autoscale, batch, budgets, health, usage
 from .catalog import Catalog, load_catalog
 from .reconciler import reconcile_once
 
@@ -251,20 +251,7 @@ class Orchestrator:
     async def _launch_clone(self, template: Deployment, *, wait: bool) -> Deployment:
         """Create one more replica from a template deployment (new id, same model/profile/limits/
         schedule), persist and emit it, and optionally drive it to READY."""
-        clone = Deployment(
-            id=_new_deployment_id(),
-            model_id=template.model_id,
-            provider=template.provider,
-            hf_repo=template.hf_repo,
-            context_window=template.context_window,
-            desired_state=DeploymentState.READY,
-            observed_state=DeploymentState.REQUESTED,
-            profile=template.profile,
-            max_concurrency=template.max_concurrency,
-            max_queue=template.max_queue,
-            queue_timeout_s=template.queue_timeout_s,
-            schedule=template.schedule,
-        )
+        clone = autoscale.replica_from(template, _new_deployment_id())
         with correlation_context(clone.id):
             self._store.save_deployment(clone)
             self._emit(clone, EventKind.DEPLOYMENT_REQUESTED, {"model_id": clone.model_id})
