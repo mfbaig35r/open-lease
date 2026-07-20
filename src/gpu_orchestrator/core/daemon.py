@@ -26,10 +26,10 @@ from ..config import Config
 from ..errors import OrchestratorError
 from ..events import EventLog
 from ..logging import get_logger
-from ..models import DeploymentState, Event, EventKind, _utcnow
+from ..models import Deployment, DeploymentState, Event, EventKind, _utcnow
 from ..providers.base import Provider
 from ..store import Store
-from . import costs
+from . import costs, schedule
 from .catalog import Catalog, load_catalog
 from .health import HealthMonitor
 from .orchestrator import build_provider, build_runtime
@@ -64,7 +64,9 @@ class Daemon:
     # --- one pass of each loop (the testable cores) ---------------------------------
 
     async def tick_reconcile(self, now: datetime | None = None) -> None:
-        for deployment in self._store.list_deployments(include_stopped=False):
+        now = now or _utcnow()
+        for deployment in self._reconcilable(now):
+            self._apply_schedule(deployment, now)
             await reconcile_once(
                 deployment,
                 provider=self._provider(deployment.provider),
@@ -75,6 +77,42 @@ class Daemon:
                 events=self._events,
                 now=now,
             )
+
+    def _reconcilable(self, now: datetime) -> list[Deployment]:
+        """Deployments to reconcile this tick: every non-stopped one, plus any stopped deployment
+        whose schedule says it should be running now (so a window boundary wakes it). A stopped
+        deployment with no such schedule is at rest and is not ticked, which is what keeps a resting
+        OFF deployment from churning the store every interval."""
+        out: dict[str, Deployment] = {}
+        for d in self._store.list_deployments(include_stopped=True):
+            if d.observed_state != DeploymentState.STOPPED:
+                out[d.id] = d
+            elif d.schedule is not None and (
+                schedule.resolve_desired_state(d, now) != DeploymentState.STOPPED
+            ):
+                out[d.id] = d
+        return list(out.values())
+
+    def _apply_schedule(self, deployment: Deployment, now: datetime) -> None:
+        """Drive a scheduled deployment's desired_state to the posture in force now. The schedule is
+        authoritative: it overrides a manual stop or start, so remove the schedule for manual
+        control. A no-op when nothing changes, so a settled deployment is left untouched."""
+        if deployment.schedule is None:
+            return
+        desired = schedule.resolve_desired_state(deployment, now)
+        if desired == deployment.desired_state:
+            return
+        deployment.desired_state = desired
+        self._store.save_deployment(deployment)
+        self._events.emit(
+            Event(
+                id=f"evt-{uuid4().hex[:12]}",
+                correlation_id=deployment.id,
+                deployment_id=deployment.id,
+                kind=EventKind.RECONCILE_ACTION,
+                payload={"action": "schedule_posture", "desired_state": desired.value},
+            )
+        )
 
     async def tick_health(self, now: datetime | None = None) -> None:
         for deployment in self._store.list_deployments(include_stopped=False):

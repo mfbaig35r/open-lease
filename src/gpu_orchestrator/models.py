@@ -10,10 +10,11 @@ upgrade old documents and fail loudly on unknown versions (spec §6, §12).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from enum import StrEnum
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 SCHEMA_VERSION = 1
 
@@ -77,6 +78,18 @@ class CloudType(StrEnum):
 
     ON_DEMAND = "on_demand"
     SPOT = "spot"
+
+
+class Posture(StrEnum):
+    """A scheduled deployment's desired running level at a point in time (capacity plan, Tier A1).
+
+    Two levels in Phase 1: ON (full capacity) and OFF (torn down, config retained). WARM_STANDBY is
+    deferred to replicas (Tier B1); with a single replica it would be identical to ON, so it earns a
+    value of its own only once a deployment can hold more than one instance.
+    """
+
+    ON = "on"
+    OFF = "off"
 
 
 class EventKind(StrEnum):
@@ -278,6 +291,50 @@ class FailureInfo(BaseModel):
     last_attempt_at: datetime | None = None  # when the last attempt failed; drives retry backoff
 
 
+class ScheduleRule(BaseModel):
+    """One window of a schedule: on these weekdays, between ``start`` and ``end`` (wall-clock in the
+    schedule's timezone), the deployment takes ``posture``. ``start`` later than ``end`` is an
+    overnight window that wraps past midnight (e.g. 22:00-06:00)."""
+
+    days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])  # 0=Mon .. 6=Sun
+    start: str  # "HH:MM", inclusive
+    end: str  # "HH:MM", exclusive
+    posture: Posture
+
+    @field_validator("start", "end")
+    @classmethod
+    def _valid_hhmm(cls, v: str) -> str:
+        time.fromisoformat(v)  # raises ValueError on a malformed "HH:MM"
+        return v
+
+    @field_validator("days")
+    @classmethod
+    def _valid_days(cls, v: list[int]) -> list[int]:
+        if any(d < 0 or d > 6 for d in v):
+            raise ValueError("days must be 0 (Mon) through 6 (Sun)")
+        return v
+
+
+class Schedule(BaseModel):
+    """A deployment's operating schedule (capacity plan, Tier A1). The daemon resolves the posture
+    in force from the wall-clock each tick and drives ``desired_state`` to match.
+    ``default_posture`` applies whenever no rule's window matches. Validators keep a malformed
+    schedule from ever being persisted, so daemon resolution never raises on bad data."""
+
+    timezone: str = "UTC"
+    default_posture: Posture = Posture.OFF
+    rules: list[ScheduleRule] = Field(default_factory=list)
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_tz(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except ZoneInfoNotFoundError as exc:  # KeyError subclass; convert so it reads as validation
+            raise ValueError(f"unknown timezone {v!r}") from exc
+        return v
+
+
 class Deployment(BaseModel):
     """The record the reconcile loop operates on.
 
@@ -304,6 +361,10 @@ class Deployment(BaseModel):
     download_progress: float | None = None
     state_history: list[StateTransition] = Field(default_factory=list)
     failure: FailureInfo | None = None
+    # Optional operating schedule (Tier A1). When set, the daemon resolves the posture in force at
+    # each tick and drives ``desired_state`` to match, so capacity follows a plan (business hours,
+    # overnight shutdown) rather than a variable meter. None = manual control (deploy/stop own it).
+    schedule: Schedule | None = None
     # Count of unexpected runtime deaths (a created pod that vanished before reaching READY, e.g. an
     # OOM crash loop) since the last healthy READY. Distinct from ``failure.attempts``, which counts
     # only provider CREATE errors: a successful create clears ``failure`` next tick, so it can never

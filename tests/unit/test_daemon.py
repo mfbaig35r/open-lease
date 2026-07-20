@@ -11,7 +11,15 @@ from gpu_orchestrator.config import Config
 from gpu_orchestrator.core.catalog import Catalog
 from gpu_orchestrator.core.daemon import Daemon
 from gpu_orchestrator.events import EventLog
-from gpu_orchestrator.models import Deployment, DeploymentState, EventKind, InstanceRequest
+from gpu_orchestrator.models import (
+    Deployment,
+    DeploymentState,
+    EventKind,
+    InstanceRequest,
+    Posture,
+    Schedule,
+    ScheduleRule,
+)
 from gpu_orchestrator.providers.mock import MockProvider
 from gpu_orchestrator.runtimes.vllm import VLLMRuntime
 from gpu_orchestrator.store import Store
@@ -49,16 +57,25 @@ def _daemon(tmp_path, provider, *, runtime=None, **cfg) -> tuple[Daemon, Store, 
     return daemon, store, events
 
 
-def _seed(store: Store, *, state: S = S.REQUESTED, instance=None, endpoint=None) -> Deployment:
+def _seed(
+    store: Store,
+    *,
+    state: S = S.REQUESTED,
+    instance=None,
+    endpoint=None,
+    desired: S = S.READY,
+    schedule=None,
+) -> Deployment:
     dep = Deployment(
         id="dep-d1",
         model_id="qwen3-0.6b",
         provider="mock",
-        desired_state=S.READY,
+        desired_state=desired,
         observed_state=state,
         profile=_PROFILE,
         instance=instance,
         endpoint_url=endpoint,
+        schedule=schedule,
     )
     store.save_deployment(dep)
     return dep
@@ -123,6 +140,66 @@ async def test_retention_prunes_old_events(tmp_path):
 
     assert removed == 1
     assert store.query_events() == []
+
+
+_BUSINESS = Schedule(
+    timezone="America/New_York",
+    default_posture=Posture.OFF,
+    rules=[ScheduleRule(days=[0, 1, 2, 3, 4], start="06:00", end="18:00", posture=Posture.ON)],
+)
+_IN_WINDOW = datetime(2026, 7, 6, 14, 0, tzinfo=UTC)  # Mon 10:00 EDT -> ON
+_OUT_OF_WINDOW = datetime(2026, 7, 6, 23, 0, tzinfo=UTC)  # Mon 19:00 EDT -> OFF
+
+
+async def test_schedule_wakes_a_stopped_deployment_in_window(tmp_path):
+    daemon, store, events = _daemon(tmp_path, MockProvider(namespace="test"))
+    # At rest: stopped and desired stopped, but a business schedule says it should be running now.
+    _seed(store, state=S.STOPPED, desired=S.STOPPED, schedule=_BUSINESS)
+
+    for _ in range(10):
+        await daemon.tick_reconcile(now=_IN_WINDOW)
+        if store.get_deployment("dep-d1").observed_state is S.READY:
+            break
+
+    dep = store.get_deployment("dep-d1")
+    assert dep.desired_state is S.READY  # schedule flipped desired, authoritatively
+    assert dep.observed_state is S.READY
+    assert any(e.payload.get("action") == "schedule_posture" for e in events.query())
+
+
+async def test_schedule_stops_a_running_deployment_out_of_window(tmp_path):
+    provider = MockProvider(namespace="test")
+    instance = await provider.create_instance(
+        InstanceRequest(
+            name="gpu-orch-test-dep-d1", gpu_type="MOCK-GPU", image="i", disk_gb=10, ports=[8000]
+        )
+    )
+    await provider.get_instance(instance.provider_instance_id)  # -> RUNNING
+    daemon, store, _ = _daemon(tmp_path, provider)
+    _seed(store, state=S.READY, instance=instance, endpoint="https://x", schedule=_BUSINESS)
+
+    for _ in range(6):
+        await daemon.tick_reconcile(now=_OUT_OF_WINDOW)
+        if store.get_deployment("dep-d1").observed_state is S.STOPPED:
+            break
+
+    dep = store.get_deployment("dep-d1")
+    assert dep.desired_state is S.STOPPED
+    assert dep.observed_state is S.STOPPED
+    assert await provider.list_instances() == []  # pod torn down (cost-safety)
+
+
+async def test_resting_off_deployment_is_not_ticked(tmp_path):
+    daemon, store, events = _daemon(tmp_path, MockProvider(namespace="test"))
+    _seed(store, state=S.STOPPED, desired=S.STOPPED, schedule=_BUSINESS)
+
+    # Out of window (OFF): the deployment is already where the schedule wants it, so it must not be
+    # pulled into the reconcile set and must not churn the store or the event log.
+    assert daemon._reconcilable(_OUT_OF_WINDOW) == []
+    await daemon.tick_reconcile(now=_OUT_OF_WINDOW)
+
+    assert store.get_deployment("dep-d1").observed_state is S.STOPPED
+    assert events.query() == []
 
 
 async def test_orphan_sweep_spares_owned_instances(tmp_path):
