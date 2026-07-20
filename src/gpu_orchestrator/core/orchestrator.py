@@ -217,6 +217,61 @@ class Orchestrator:
         self._store.save_deployment(deployment)
         return await self._drive(deployment, _TERMINAL_READY)
 
+    async def scale(self, model_id: str, replicas: int, *, wait: bool = False) -> list[Deployment]:
+        """Ensure ``replicas`` deployments serve ``model_id`` (Tier B). The proxy load-balances over
+        whatever is READY, so a replica is just another deployment of the same model: the reconciler
+        and next_step are untouched. Scale up by cloning an existing member (its profile, limits,
+        and schedule); scale down by stopping the newest surplus, keeping the established
+        ones. Requires an existing member to clone when scaling up from zero (use
+        `gpu deploy --replicas` for the initial pool)."""
+        if replicas < 0:
+            raise ReconcileError("replicas cannot be negative")
+        members = sorted(
+            (
+                d
+                for d in self._store.list_deployments(include_stopped=False)
+                if d.model_id == model_id and d.desired_state != DeploymentState.STOPPED
+            ),
+            key=lambda d: d.created_at,
+        )
+        if replicas > len(members):
+            if not members:
+                raise ReconcileError(
+                    f"no active deployment of {model_id!r} to scale; deploy one first"
+                )
+            template = members[-1]
+            for _ in range(replicas - len(members)):
+                members.append(await self._launch_clone(template, wait=wait))
+        elif replicas < len(members):
+            for surplus in members[replicas:]:  # stop the newest surplus, keep the established ones
+                await self.stop_deployment(surplus.id)
+            members = members[:replicas]
+        return members
+
+    async def _launch_clone(self, template: Deployment, *, wait: bool) -> Deployment:
+        """Create one more replica from a template deployment (new id, same model/profile/limits/
+        schedule), persist and emit it, and optionally drive it to READY."""
+        clone = Deployment(
+            id=_new_deployment_id(),
+            model_id=template.model_id,
+            provider=template.provider,
+            hf_repo=template.hf_repo,
+            context_window=template.context_window,
+            desired_state=DeploymentState.READY,
+            observed_state=DeploymentState.REQUESTED,
+            profile=template.profile,
+            max_concurrency=template.max_concurrency,
+            max_queue=template.max_queue,
+            queue_timeout_s=template.queue_timeout_s,
+            schedule=template.schedule,
+        )
+        with correlation_context(clone.id):
+            self._store.save_deployment(clone)
+            self._emit(clone, EventKind.DEPLOYMENT_REQUESTED, {"model_id": clone.model_id})
+            if wait:
+                clone = await self._drive(clone, _TERMINAL_READY)
+        return clone
+
     async def set_schedule(self, deployment_id: str, schedule: Schedule) -> Deployment:
         """Attach or replace a deployment's operating schedule (capacity plan, Tier A1). The running
         daemon resolves the posture each tick and drives capacity to match; nothing is brought up

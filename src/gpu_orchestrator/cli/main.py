@@ -201,6 +201,9 @@ def deploy(
     gpus: int = typer.Option(
         1, "--gpus", help="Ad-hoc: GPUs per pod for tensor parallelism (a big model needs >1)."
     ),
+    replicas: int = typer.Option(
+        1, "--replicas", help="Deploy N load-balanced replicas of the model (Tier B)."
+    ),
     wait: bool = typer.Option(False, "--wait", help="Block until READY or FAILED."),
     chat: bool = typer.Option(False, "--chat", help="Wait for READY, then open a chat REPL."),
     set_: list[str] | None = typer.Option(None, "--set", help="Override key=value (repeatable)."),
@@ -237,7 +240,14 @@ def deploy(
                 model, provider=provider, gpu=gpu, wait=wait, overrides=_overrides(set_)
             )
         )
-    render.console.print(f"Deployment [b]{dep.id}[/b] -> {dep.observed_state.value}")
+    if replicas > 1:
+        deps = _run(orch.scale(dep.model_id, replicas, wait=wait))
+        render.console.print(
+            f"Deployed [b]{len(deps)}[/b] replicas of [b]{dep.model_id}[/b]: "
+            + ", ".join(d.id for d in deps)
+        )
+    else:
+        render.console.print(f"Deployment [b]{dep.id}[/b] -> {dep.observed_state.value}")
     if chat:
         if dep.observed_state.value != "ready":
             _fail_msg(f"{dep.id} did not reach READY (state: {dep.observed_state.value}).")
@@ -255,6 +265,19 @@ def deploy(
                     f"no daemon running, so {dep.id} will not progress",
                     hint="start one with `gpu daemon --detach` / `gpu up`, or deploy with --wait",
                 )
+
+
+@app.command()
+def scale(
+    model: str,
+    replicas: int,
+    wait: bool = typer.Option(False, "--wait", help="Block until the new replicas are READY."),
+) -> None:
+    """Scale the replicas serving a model up or down. The proxy load-balances across them; scaling
+    up clones an existing deployment, scaling down stops the newest surplus."""
+    deps = _run(_orchestrator().scale(model, replicas, wait=wait))
+    ids = ", ".join(d.id for d in deps) if deps else "(none)"
+    render.console.print(f"[b]{model}[/b] now has [b]{len(deps)}[/b] replica(s): {ids}")
 
 
 @app.command()

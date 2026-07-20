@@ -16,6 +16,7 @@ from gpu_orchestrator.errors import (
     BudgetExceededError,
     DeploymentNotFoundError,
     ModelNotFoundError,
+    ReconcileError,
 )
 from gpu_orchestrator.models import (
     BudgetAction,
@@ -259,3 +260,34 @@ async def test_set_limits_rejects_bad_value(tmp_path):
     dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)
     with pytest.raises(ValidationError):  # validated at set time, not on next load
         await orch.set_limits(dep.id, max_concurrency=0)
+
+
+async def test_scale_up_clones_replicas_with_config(tmp_path):
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
+    await orch.set_limits(dep.id, max_concurrency=4)  # template carries a limit
+    deps = await orch.scale("qwen3-0.6b", 3, wait=True)
+    assert len(deps) == 3
+    assert len({d.id for d in deps}) == 3  # distinct pods
+    assert all(d.model_id == "qwen3-0.6b" for d in deps)
+    assert all(d.max_concurrency == 4 for d in deps)  # clones inherit the template's config
+
+
+async def test_scale_down_stops_the_surplus(tmp_path):
+    orch = _orch(tmp_path)
+    await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
+    await orch.scale("qwen3-0.6b", 3, wait=True)
+    remaining = await orch.scale("qwen3-0.6b", 1, wait=True)
+    assert len(remaining) == 1
+    active = [
+        d
+        for d in orch.list_deployments(include_stopped=False)
+        if d.model_id == "qwen3-0.6b" and d.desired_state is not S.STOPPED
+    ]
+    assert len(active) == 1
+
+
+async def test_scale_up_from_zero_raises(tmp_path):
+    orch = _orch(tmp_path)
+    with pytest.raises(ReconcileError):
+        await orch.scale("qwen3-0.6b", 2)  # nothing to clone from

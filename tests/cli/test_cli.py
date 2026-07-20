@@ -292,3 +292,21 @@ def test_limits_bad_value_fails_cleanly(cli):
     result = runner.invoke(app, ["limits", dep_id, "--max", "0"])
     assert result.exit_code == 1
     assert orch.get_deployment(dep_id).max_concurrency is None  # nothing persisted
+
+
+def test_deploy_replicas_creates_a_pool(cli):
+    runner, orch = cli
+    result = runner.invoke(
+        app, ["deploy", "qwen3-0.6b", "--provider", "mock", "--wait", "--replicas", "2"]
+    )
+    assert result.exit_code == 0
+    pool = [d for d in orch.list_deployments() if d.model_id == "qwen3-0.6b"]
+    assert len(pool) == 2
+
+
+def test_scale_command_resizes_the_pool(cli):
+    runner, orch = cli
+    _deploy_id(runner, orch)  # one replica, READY
+    up = runner.invoke(app, ["scale", "qwen3-0.6b", "3"])
+    assert up.exit_code == 0
+    assert len([d for d in orch.list_deployments() if d.model_id == "qwen3-0.6b"]) == 3
