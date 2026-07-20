@@ -243,3 +243,31 @@ def test_schedule_bad_window_fails_cleanly(cli):
     result = runner.invoke(app, ["schedule", dep_id, "--on", "funday 06:00-18:00"])
     assert result.exit_code == 1
     assert orch.get_deployment(dep_id).schedule is None  # nothing persisted on bad input
+
+
+def test_budget_set_and_list(cli):
+    runner, orch = cli
+    result = runner.invoke(
+        app, ["budget", "set", "--limit", "100", "--window", "monthly", "--on-exceed", "warn"]
+    )
+    assert result.exit_code == 0
+    assert len(orch.list_budgets()) == 1
+    listed = runner.invoke(app, ["budget", "list"])
+    assert listed.exit_code == 0
+    assert "Spend ceilings" in listed.output
+
+
+def test_budget_bad_window_fails_cleanly(cli):
+    runner, orch = cli
+    result = runner.invoke(app, ["budget", "set", "--limit", "100", "--window", "weekly"])
+    assert result.exit_code == 1
+    assert orch.list_budgets() == []  # nothing persisted
+
+
+def test_budget_rm(cli):
+    runner, orch = cli
+    runner.invoke(app, ["budget", "set", "--limit", "50", "--window", "daily"])
+    budget_id = orch.list_budgets()[0].id
+    result = runner.invoke(app, ["budget", "rm", budget_id])
+    assert result.exit_code == 0
+    assert orch.list_budgets() == []

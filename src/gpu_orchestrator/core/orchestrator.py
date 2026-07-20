@@ -18,10 +18,13 @@ from datetime import datetime
 from uuid import uuid4
 
 from ..config import Config
-from ..errors import OrchestratorError, ReconcileError
+from ..errors import BudgetExceededError, OrchestratorError, ReconcileError
 from ..events import EventLog
 from ..logging import correlation_context, get_logger
 from ..models import (
+    Budget,
+    BudgetAction,
+    BudgetWindow,
     CostEstimate,
     CostRecord,
     Deployment,
@@ -39,11 +42,12 @@ from ..models import (
     UsageSummary,
     ValidationMetadata,
     VolumeInfo,
+    _utcnow,
 )
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
-from . import batch, health, usage
+from . import batch, budgets, health, usage
 from .catalog import Catalog, load_catalog
 from .reconciler import reconcile_once
 
@@ -169,6 +173,7 @@ class Orchestrator:
         wait: bool,
     ) -> Deployment:
         """Shared tail of deploy_model / deploy_adhoc: create the record, persist, emit, drive."""
+        self._enforce_budget_admission()
         deployment = Deployment(
             id=_new_deployment_id(),
             model_id=model_id,
@@ -230,6 +235,46 @@ class Orchestrator:
         self._store.save_deployment(deployment)
         return deployment
 
+    async def set_budget(
+        self,
+        *,
+        limit_usd: float,
+        window: BudgetWindow,
+        on_exceed: BudgetAction = BudgetAction.WARN,
+        deployment_id: str | None = None,
+        warn_fraction: float = 0.8,
+    ) -> Budget:
+        """Create a spend ceiling (capacity plan, Tier A2). ``deployment_id`` None is account-wide.
+        The running daemon evaluates it each tick and enforces ``on_exceed``; a `block_new` ceiling
+        is also checked here before every new deploy."""
+        budget = Budget(
+            id=_new_budget_id(),
+            deployment_id=deployment_id,
+            window=window,
+            limit_usd=limit_usd,
+            on_exceed=on_exceed,
+            warn_fraction=warn_fraction,
+        )
+        self._store.save_budget(budget)
+        return budget
+
+    async def remove_budget(self, budget_id: str) -> bool:
+        """Delete a budget; returns True if one was removed. Any budget_hold it set clears on the
+        daemon's next budget tick."""
+        return self._store.delete_budget(budget_id)
+
+    def _enforce_budget_admission(self) -> None:
+        """Refuse a new deploy while an account `block_new` budget is over its ceiling (a policy
+        boundary). A per-deployment budget does not gate a brand-new deploy (nothing to bind to)."""
+        blocker = budgets.admission_blocked(
+            self._store.list_budgets(), self._store.get_cost_records(), _utcnow()
+        )
+        if blocker is not None:
+            raise BudgetExceededError(
+                f"account budget {blocker.id} is over its {blocker.window.value} ceiling of "
+                f"${blocker.limit_usd:.2f}; new deploys are blocked until the window resets"
+            )
+
     # --- reads ----------------------------------------------------------------------
 
     def get_deployment(self, deployment_id: str) -> Deployment:
@@ -237,6 +282,17 @@ class Orchestrator:
 
     def list_deployments(self, *, include_stopped: bool = False) -> list[Deployment]:
         return self._store.list_deployments(include_stopped=include_stopped)
+
+    def list_budgets(self) -> list[Budget]:
+        return self._store.list_budgets()
+
+    def budget_status(self) -> list[budgets.BudgetStatus]:
+        """Each budget with its spend so far this window (for `gpu budget list`)."""
+        now = _utcnow()
+        return [
+            budgets.evaluate(b, self._store.get_cost_records(b.deployment_id), now)
+            for b in self._store.list_budgets()
+        ]
 
     def list_models(self) -> list[ModelSpec]:
         return self._catalog.list_models()
@@ -411,6 +467,10 @@ class Orchestrator:
 
 def _new_deployment_id() -> str:
     return f"dep-{uuid4().hex[:6]}"
+
+
+def _new_budget_id() -> str:
+    return f"bud-{uuid4().hex[:6]}"
 
 
 def _adhoc_model_id(hf_repo: str) -> str:

@@ -4,14 +4,23 @@ read-only surface (models, cost estimate, providers)."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 
 from gpu_orchestrator.config import Config
 from gpu_orchestrator.core.catalog import Catalog
 from gpu_orchestrator.core.orchestrator import Orchestrator
-from gpu_orchestrator.errors import DeploymentNotFoundError, ModelNotFoundError
+from gpu_orchestrator.errors import (
+    BudgetExceededError,
+    DeploymentNotFoundError,
+    ModelNotFoundError,
+)
 from gpu_orchestrator.models import (
+    BudgetAction,
+    BudgetWindow,
+    CostRecord,
     DeploymentState,
     EventKind,
     HealthState,
@@ -184,3 +193,48 @@ async def test_set_schedule_unknown_deployment_raises(tmp_path):
     orch = _orch(tmp_path)
     with pytest.raises(DeploymentNotFoundError):
         await orch.set_schedule("dep-nope", Schedule())
+
+
+async def test_set_list_and_remove_budget(tmp_path):
+    orch = _orch(tmp_path)
+    budget = await orch.set_budget(
+        limit_usd=100.0, window=BudgetWindow.MONTHLY, on_exceed=BudgetAction.WARN
+    )
+    assert budget.id.startswith("bud-")
+    assert [b.id for b in orch.list_budgets()] == [budget.id]
+    (status,) = orch.budget_status()
+    assert status.spent_usd == 0.0 and not status.exceeded  # nothing accrued yet
+
+    assert await orch.remove_budget(budget.id) is True
+    assert orch.list_budgets() == []
+
+
+async def test_block_new_budget_refuses_new_deploy(tmp_path):
+    orch = _orch(tmp_path)
+    # $5 already accrued this month (a pod that has run an hour), well over a $1 account ceiling.
+    orch._store.save_cost_record(
+        CostRecord(
+            deployment_id="dep-x",
+            gpu_hourly_usd=5.0,
+            started_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+    )
+    await orch.set_budget(
+        limit_usd=1.0, window=BudgetWindow.MONTHLY, on_exceed=BudgetAction.BLOCK_NEW
+    )
+    with pytest.raises(BudgetExceededError):
+        await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)
+
+
+async def test_warn_budget_does_not_block_deploy(tmp_path):
+    orch = _orch(tmp_path)
+    orch._store.save_cost_record(
+        CostRecord(
+            deployment_id="dep-x",
+            gpu_hourly_usd=5.0,
+            started_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+    )
+    await orch.set_budget(limit_usd=1.0, window=BudgetWindow.MONTHLY, on_exceed=BudgetAction.WARN)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)  # not blocked
+    assert dep.observed_state is S.REQUESTED

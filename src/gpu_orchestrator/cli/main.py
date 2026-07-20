@@ -25,12 +25,21 @@ from ..core import batch as batchlib  # aliased: the `batch` command below would
 from ..core.orchestrator import Orchestrator
 from ..errors import OrchestratorError
 from ..logging import configure_logging
-from ..models import Posture, RuntimeOverrides, Schedule, ScheduleRule
+from ..models import (
+    BudgetAction,
+    BudgetWindow,
+    Posture,
+    RuntimeOverrides,
+    Schedule,
+    ScheduleRule,
+)
 from . import process, render
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="Deploy and run open LLMs on GPUs."
 )
+budget_app = typer.Typer(no_args_is_help=True, help="Spend ceilings (capacity plan).")
+app.add_typer(budget_app, name="budget")
 
 _T = TypeVar("_T")
 _state = {"debug": False}
@@ -302,6 +311,55 @@ def schedule(
         _fail_msg(str(exc))
     dep = _run(orch.set_schedule(deployment_id, built))
     render.schedule_view(dep)
+
+
+@budget_app.command("set")
+def budget_set(
+    limit: float = typer.Option(..., "--limit", help="Ceiling in USD."),
+    window: str = typer.Option("monthly", "--window", help="daily or monthly."),
+    on_exceed: str = typer.Option(
+        "warn", "--on-exceed", help="warn (event only), stop (tear down), or block_new."
+    ),
+    deployment: str = typer.Option(
+        None, "--deployment", help="Scope to one deployment (default: account-wide)."
+    ),
+    warn_at: float = typer.Option(0.8, "--warn-at", help="Soft-warning fraction, 0 to 1."),
+) -> None:
+    """Set a spend ceiling. The daemon enforces it; a hard ceiling needs the daemon running."""
+    try:
+        budget = _run(
+            _orchestrator().set_budget(
+                limit_usd=limit,
+                window=BudgetWindow(window),
+                on_exceed=BudgetAction(on_exceed),
+                deployment_id=deployment,
+                warn_fraction=warn_at,
+            )
+        )
+    except ValidationError as exc:
+        _fail_msg(str(exc.errors()[0]["msg"]))
+    except ValueError as exc:  # bad --window / --on-exceed enum value
+        _fail_msg(str(exc))
+    scope = budget.deployment_id or "account"
+    render.console.print(
+        f"Budget [b]{budget.id}[/b] set: ${budget.limit_usd:.2f} / {budget.window.value} "
+        f"({scope}), on exceed [b]{budget.on_exceed.value}[/b]."
+    )
+
+
+@budget_app.command("list")
+def budget_list() -> None:
+    """Show budgets and how much each has spent this window."""
+    render.budgets_table(_call(_orchestrator().budget_status))
+
+
+@budget_app.command("rm")
+def budget_rm(budget_id: str) -> None:
+    """Remove a budget by id."""
+    if _run(_orchestrator().remove_budget(budget_id)):
+        render.console.print(f"Removed budget [b]{budget_id}[/b].")
+    else:
+        _fail_msg(f"no budget with id {budget_id!r}")
 
 
 # --- read commands --------------------------------------------------------------------

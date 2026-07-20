@@ -77,10 +77,17 @@ window reconciles to zero instances and back to `RUNNING` at the boundary.
 **Open sub-decision.** Define `WARM_STANDBY` precisely. Simplest v1: standby == 1 replica (needs no
 new concept). Richer standby (a paused/checkpointed pod) depends on provider support and is deferred.
 
-### A2. Budget ceilings (spend governance)
+### A2. Budget ceilings (spend governance): SHIPPED 2026-07-19
 
 Makes true: "hard monthly infrastructure budget," "daily infrastructure ceiling," "knowable cost
-ceiling" (outline Sections 5, 9, 12).
+ceiling" (outline Sections 5, 9, 12). Shipped as `gpu budget set/list/rm` over `--limit`,
+`--window daily|monthly`, `--on-exceed warn|stop|block_new`, `--deployment` (else account-wide). A
+budget is a policy layer over existing `CostRecord` data, no new accounting. `stop` enforces via a
+`Deployment.budget_hold` that outranks the schedule (precedence: budget > schedule > manual),
+released when the window resets. `block_new` is checked at deploy admission. Full: `models.Budget`
++ enums + events, `core/budgets.py` (pure), store migration v4, daemon `tick_budget`, orchestrator
+`set_budget`/`remove_budget`/`list_budgets`/`budget_status`, `render.budgets_table`. Window
+boundaries are UTC in Phase 1 (a per-budget timezone is a cheap follow-up).
 
 **Concept.** A `Budget` policy = `{scope, window: daily|monthly, limit_usd, on_exceed}` where
 `on_exceed in {warn, stop, block_new}`. Scope is deployment-level and account-level (account = the

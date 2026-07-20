@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ..core.batch import BatchResult
+    from ..core.budgets import BudgetStatus
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -331,3 +332,33 @@ def schedule_view(deployment: Deployment) -> None:
     for rule in schedule.rules:
         days = ",".join(_DAY_NAMES[d] for d in rule.days)
         console.print(f"  [b]{rule.posture.value:<3}[/b]  {days:<27}  {rule.start}-{rule.end}")
+
+
+def budgets_table(statuses: list[BudgetStatus]) -> None:
+    """Show spend ceilings with how much each has used this window (capacity plan, Tier A2)."""
+    if not statuses:
+        console.print("[dim]No budgets set. Create one with `gpu budget set --limit ...`.[/dim]")
+        return
+    table = Table(title="Spend ceilings")
+    for col in ("ID", "SCOPE", "WINDOW", "LIMIT", "SPENT", "USED", "ON EXCEED", "STATE"):
+        table.add_column(col)
+    for status in statuses:
+        budget = status.budget
+        state = (
+            "[red]exceeded[/]"
+            if status.exceeded
+            else "[yellow]warn[/]"
+            if status.over_warn
+            else "[green]ok[/]"
+        )
+        table.add_row(
+            budget.id,
+            budget.deployment_id or "account",
+            budget.window.value,
+            f"${budget.limit_usd:.2f}",
+            f"${status.spent_usd:.2f}",
+            f"{status.fraction * 100:.0f}%",
+            budget.on_exceed.value,
+            state,
+        )
+    console.print(table)

@@ -29,6 +29,13 @@ All notable changes to open-lease are documented here. The format follows
   weekend spend drop to zero on a known schedule. `--off` windows, `--default on|off`, `--clear` to
   return to manual control, and no-args to show the current schedule. The schedule only rewrites
   `desired_state`; the reconciler drives it, so the pure decision core is unchanged.
+- Spend ceilings (capacity plan, Tier A2): `gpu budget set --limit 500 --window monthly --on-exceed
+  stop` caps GPU spend over a daily or monthly window, account-wide or scoped to one deployment
+  (`--deployment`). A budget is a policy layer over existing cost records, so there is no new
+  accounting. `--on-exceed warn` emits an event, `stop` tears down the in-scope deployment(s) for
+  the rest of the window (a budget stop outranks a schedule), `block_new` refuses new deploys while
+  over budget. `gpu budget list` shows spend so far this window; `gpu budget rm <id>` removes one.
+  The daemon evaluates budgets each tick and enforces `stop` via a hold that the reconciler drives.
 
 ### Changed
 - Bumped the default ad-hoc deploy image from `vllm/vllm-openai:v0.9.1` (mid-2025) to `v0.25.1`. The
