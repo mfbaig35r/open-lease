@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import TypeVar
 
 import typer
+from pydantic import ValidationError
 
 from ..config import Config
 from ..core import batch as batchlib  # aliased: the `batch` command below would shadow the module
 from ..core.orchestrator import Orchestrator
 from ..errors import OrchestratorError
 from ..logging import configure_logging
-from ..models import RuntimeOverrides
+from ..models import Posture, RuntimeOverrides, Schedule, ScheduleRule
 from . import process, render
 
 app = typer.Typer(
@@ -126,6 +127,50 @@ def _overrides(sets: list[str] | None) -> RuntimeOverrides | None:
     return RuntimeOverrides(launch_args=launch_args, env=env)
 
 
+_DAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _parse_days(token: str) -> list[int]:
+    """Parse a day token: ``all``, a range (``mon-fri``), or a list (``mon,wed,fri``)."""
+    token = token.strip().lower()
+    if token == "all":
+        return [0, 1, 2, 3, 4, 5, 6]
+    if "-" in token:
+        lo, hi = token.split("-", 1)
+        if lo not in _DAY_INDEX or hi not in _DAY_INDEX:
+            raise ValueError(f"unknown day range {token!r} (use mon..sun)")
+        return list(range(_DAY_INDEX[lo], _DAY_INDEX[hi] + 1))
+    days = []
+    for name in token.split(","):
+        if name not in _DAY_INDEX:
+            raise ValueError(f"unknown day {name!r} (use mon..sun, comma-separated)")
+        days.append(_DAY_INDEX[name])
+    return days
+
+
+def _parse_window(spec: str, posture: Posture) -> ScheduleRule:
+    """Parse one window, ``"<days> HH:MM-HH:MM"`` (e.g. ``"mon-fri 06:00-18:00"``)."""
+    parts = spec.split()
+    if len(parts) != 2 or "-" not in parts[1]:
+        raise ValueError(f'window must be "<days> HH:MM-HH:MM", got {spec!r}')
+    start, end = parts[1].split("-", 1)
+    return ScheduleRule(days=_parse_days(parts[0]), start=start, end=end, posture=posture)
+
+
+def _build_schedule(on: list[str], off: list[str], tz: str, default: str) -> Schedule:
+    """Assemble a Schedule from repeated ``--on`` / ``--off`` windows. ON windows are matched first,
+    then OFF; ``default`` is the posture when nothing matches. Raises ValueError with a clean
+    message on any malformed input (bad day, time, or timezone)."""
+    if default.lower() not in ("on", "off"):
+        raise ValueError("--default must be on or off")
+    try:
+        rules = [_parse_window(w, Posture.ON) for w in on]
+        rules += [_parse_window(w, Posture.OFF) for w in off]
+        return Schedule(timezone=tz, default_posture=Posture(default.lower()), rules=rules)
+    except ValidationError as exc:  # model validators reject bad HH:MM / timezone
+        raise ValueError(str(exc.errors()[0]["msg"])) from exc
+
+
 # --- lifecycle commands ---------------------------------------------------------------
 
 
@@ -224,6 +269,39 @@ def restart(deployment_id: str) -> None:
     """Stop and redeploy the same profile (a full cold start)."""
     dep = _run(_orchestrator().restart_deployment(deployment_id))
     render.console.print(f"Restarted [b]{dep.id}[/b] -> {dep.observed_state.value}")
+
+
+@app.command()
+def schedule(
+    deployment_id: str,
+    on: list[str] = typer.Option(
+        [], "--on", help='ON window "<days> HH:MM-HH:MM", e.g. "mon-fri 06:00-18:00" (repeatable).'
+    ),
+    off: list[str] = typer.Option([], "--off", help="OFF window, same format (repeatable)."),
+    tz: str = typer.Option("UTC", "--tz", help="Timezone for the windows (e.g. America/New_York)."),
+    default: str = typer.Option("off", "--default", help="Posture when no window matches: on|off."),
+    clear: bool = typer.Option(False, "--clear", help="Remove the schedule (manual control)."),
+) -> None:
+    """Set, show, or clear a deployment's operating schedule.
+
+    Capacity follows the schedule instead of running until manually stopped: the daemon brings the
+    deployment up during ON windows and tears it down otherwise, so spend has a known ceiling. With
+    no options, prints the current schedule. Needs the daemon running to take effect.
+    """
+    orch = _orchestrator()
+    if clear:
+        dep = _run(orch.clear_schedule(deployment_id))
+        render.console.print(f"Cleared schedule on [b]{dep.id}[/b] (manual control).")
+        return
+    if not on and not off:
+        render.schedule_view(_call(orch.get_deployment, deployment_id))
+        return
+    try:
+        built = _build_schedule(on, off, tz, default)
+    except ValueError as exc:
+        _fail_msg(str(exc))
+    dep = _run(orch.set_schedule(deployment_id, built))
+    render.schedule_view(dep)
 
 
 # --- read commands --------------------------------------------------------------------

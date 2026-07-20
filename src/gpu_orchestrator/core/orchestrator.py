@@ -35,6 +35,7 @@ from ..models import (
     ProviderInfo,
     RuntimeOverrides,
     RuntimeProfile,
+    Schedule,
     UsageSummary,
     ValidationMetadata,
     VolumeInfo,
@@ -210,6 +211,24 @@ class Orchestrator:
         deployment.failure = None
         self._store.save_deployment(deployment)
         return await self._drive(deployment, _TERMINAL_READY)
+
+    async def set_schedule(self, deployment_id: str, schedule: Schedule) -> Deployment:
+        """Attach or replace a deployment's operating schedule (capacity plan, Tier A1). The running
+        daemon resolves the posture each tick and drives capacity to match; nothing is brought up
+        or torn down in this call. The schedule is authoritative over manual stop/start until
+        cleared."""
+        deployment = self._store.get_deployment(deployment_id)
+        deployment.schedule = schedule
+        self._store.save_deployment(deployment)
+        return deployment
+
+    async def clear_schedule(self, deployment_id: str) -> Deployment:
+        """Remove a deployment's schedule, returning it to manual control (deploy/stop own desired
+        state again). Leaves the current desired_state as-is."""
+        deployment = self._store.get_deployment(deployment_id)
+        deployment.schedule = None
+        self._store.save_deployment(deployment)
+        return deployment
 
     # --- reads ----------------------------------------------------------------------
 

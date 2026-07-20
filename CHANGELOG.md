@@ -23,6 +23,12 @@ All notable changes to open-lease are documented here. The format follows
   Throughput-bound batch work, the cheap way to parse thousands of documents; metered like proxy
   traffic so a run shows up in `gpu usage`. Accepts full chat requests, `{"prompt": ...}` objects,
   or bare strings, with an optional `--system` prompt.
+- Operating schedules (capacity plan, Tier A1): `gpu schedule <deployment> --on "mon-fri 06:00-18:00"
+  --tz America/New_York` makes capacity follow a plan instead of running until manually stopped. The
+  daemon brings the deployment up during ON windows and tears it down otherwise, so overnight and
+  weekend spend drop to zero on a known schedule. `--off` windows, `--default on|off`, `--clear` to
+  return to manual control, and no-args to show the current schedule. The schedule only rewrites
+  `desired_state`; the reconciler drives it, so the pure decision core is unchanged.
 
 ### Changed
 - Bumped the default ad-hoc deploy image from `vllm/vllm-openai:v0.9.1` (mid-2025) to `v0.25.1`. The

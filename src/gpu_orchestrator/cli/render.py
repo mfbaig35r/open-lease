@@ -312,3 +312,22 @@ def config_table(effective: dict[str, object]) -> None:
     for key, value in effective.items():
         table.add_row(key, str(value))
     console.print(table)
+
+
+_DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def schedule_view(deployment: Deployment) -> None:
+    """Show a deployment's operating schedule (capacity plan, Tier A1), or that it has none."""
+    schedule = deployment.schedule
+    if schedule is None:
+        console.print(f"[dim]{deployment.id} has no schedule (manual control).[/dim]")
+        return
+    console.print(
+        f"[b]{deployment.id}[/b] schedule  "
+        f"tz=[cyan]{schedule.timezone}[/cyan]  "
+        f"default=[cyan]{schedule.default_posture.value}[/cyan]"
+    )
+    for rule in schedule.rules:
+        days = ",".join(_DAY_NAMES[d] for d in rule.days)
+        console.print(f"  [b]{rule.posture.value:<3}[/b]  {days:<27}  {rule.start}-{rule.end}")

@@ -11,7 +11,14 @@ from gpu_orchestrator.config import Config
 from gpu_orchestrator.core.catalog import Catalog
 from gpu_orchestrator.core.orchestrator import Orchestrator
 from gpu_orchestrator.errors import DeploymentNotFoundError, ModelNotFoundError
-from gpu_orchestrator.models import DeploymentState, EventKind, HealthState
+from gpu_orchestrator.models import (
+    DeploymentState,
+    EventKind,
+    HealthState,
+    Posture,
+    Schedule,
+    ScheduleRule,
+)
 from gpu_orchestrator.providers.mock import MockProvider
 from gpu_orchestrator.runtimes.vllm import VLLMRuntime
 from tests.fixtures.catalog import QWEN3_06B_PROFILE, QWEN3_06B_SPEC
@@ -152,3 +159,28 @@ async def test_get_health_reports_healthy(tmp_path):
     dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=True)
     status = await orch.get_health(dep.id)
     assert status.status is HealthState.HEALTHY
+
+
+async def test_set_and_clear_schedule_round_trip(tmp_path):
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)
+    sched = Schedule(
+        timezone="America/New_York",
+        rules=[ScheduleRule(days=[0, 4], start="06:00", end="18:00", posture=Posture.ON)],
+    )
+    updated = await orch.set_schedule(dep.id, sched)
+    assert updated.schedule is not None
+    # persisted through the store, not just the returned object
+    reloaded = orch.get_deployment(dep.id)
+    assert reloaded.schedule.timezone == "America/New_York"
+    assert reloaded.schedule.rules[0].start == "06:00"
+
+    cleared = await orch.clear_schedule(dep.id)
+    assert cleared.schedule is None
+    assert orch.get_deployment(dep.id).schedule is None
+
+
+async def test_set_schedule_unknown_deployment_raises(tmp_path):
+    orch = _orch(tmp_path)
+    with pytest.raises(DeploymentNotFoundError):
+        await orch.set_schedule("dep-nope", Schedule())

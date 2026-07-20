@@ -33,23 +33,28 @@ How each item fits without violating the architecture:
 
 ---
 
-## Tier A — build. Cheap, on-thesis, makes the flagship post true.
+## Tier A: build. Cheap, on-thesis, makes the flagship post true.
 
 These three deliver the outline's headline promises: predictable ceiling, capacity envelope,
 controlled concurrency. None re-architects anything; each is an extension of an existing seam.
 
-### A1. Operating schedules (scheduled availability) — highest leverage
+### A1. Operating schedules (scheduled availability): SHIPPED 2026-07-19
 
-Makes true: "business-hours availability," "warm standby," "scheduled shutdown," predictable cost
-(outline Sections 4, 5, 8).
+Makes true: "business-hours availability," "scheduled shutdown," predictable cost (outline Sections
+4, 5, 8). Shipped as `gpu schedule <deployment> --on "<days> HH:MM-HH:MM" [--off ...] [--tz ...]
+[--default on|off] [--clear]`. The daemon resolves the posture each reconcile tick and drives
+`desired_state`; the pure decision core is unchanged. Two postures (ON/OFF); `WARM_STANDBY` deferred
+to replicas (B1). Full: `models.Posture/Schedule/ScheduleRule`, `core/schedule.py` (pure resolver),
+daemon `_reconcilable`/`_apply_schedule`, orchestrator `set_schedule`/`clear_schedule`,
+`render.schedule_view`.
 
 **Concept.** A deployment carries an optional `Schedule`: an ordered set of rules mapping a
 recurring time window to a *posture*. Postures:
-- `RUNNING` — full desired capacity (current behavior).
-- `WARM_STANDBY` — minimum footprint kept alive (defined below; for now = 1 replica, the smallest
+- `RUNNING`: full desired capacity (current behavior).
+- `WARM_STANDBY`: minimum footprint kept alive (defined below; for now = 1 replica, the smallest
   viable pod for that model). Distinct from OFF so a cold start is not on the critical path at the
   next window.
-- `OFF` — instances torn down, deployment config retained (not deleted).
+- `OFF`: instances torn down, deployment config retained (not deleted).
 
 **Data model.** `Schedule` Pydantic model on `Deployment`: `timezone: str`, `rules: list[Rule]`
 where `Rule = {days, start, end, posture}`, plus a `default_posture` for uncovered time. Persisted
@@ -123,7 +128,7 @@ released when a streamed response completes and when a client disconnects mid-st
 
 ---
 
-## Tier B — real horizontal capacity. Medium lift, on-model, publish as near roadmap.
+## Tier B: real horizontal capacity. Medium lift, on-model, publish as near roadmap.
 
 ### B1. Replicas + load balancing
 
@@ -147,7 +152,7 @@ and pick per request.
 instance per deployment; each generalizes to a set. Do this as its own reviewed step (heart-of-system
 change, like the original reconciler), not folded into Tier A.
 
-### B2. Autoscaling (demand-driven replicas) — depends on A3 + B1
+### B2. Autoscaling (demand-driven replicas): depends on A3 + B1
 
 Makes true: "add capacity during peak demand," the dynamic half of the capacity dial.
 
@@ -164,12 +169,12 @@ both land.
 
 ---
 
-## Tier C — decide before spec. This is where scope escapes the wedge.
+## Tier C: decide before spec. This is where scope escapes the wedge.
 
 These are not "build later by default." Two of the three change what OpenLease *is* and should be a
 deliberate choice, not a backlog inheritance.
 
-### C1. Frontier fallback / multi-provider routing — build only the narrow case
+### C1. Frontier fallback / multi-provider routing: build only the narrow case
 
 **The scope trap.** The moment the proxy routes to an external commercial API, OpenLease stops being
 a GPU-capacity control plane and becomes a general AI gateway, which is a crowded category with
@@ -186,7 +191,7 @@ sits behind an existing gateway rather than rebuilding one.
 
 **Status:** conceptual only; needs an explicit yes on the narrow-overflow scope before it is specced.
 
-### C2. Per-team / per-project quotas + identity — defer or integrate
+### C2. Per-team / per-project quotas + identity: defer or integrate
 
 **Why it is large.** Team/project quotas need a tenancy and identity model. The spec explicitly
 defers this: sqlite single-process, a single static bearer token for the API, Postgres as the
@@ -199,7 +204,7 @@ identity provider" line in the post. Do not build identity to satisfy a marketin
 
 **Status:** deferred. Reframe as roadmap in the post.
 
-### C3. Deterministic complexity router (local vs frontier by task) — defer
+### C3. Deterministic complexity router (local vs frontier by task): defer
 
 **Why.** Routing engineering tasks to local-vs-frontier by complexity needs classification logic in
 the request path and multi-provider routing (C1). Heuristic versions are weak; model-based versions

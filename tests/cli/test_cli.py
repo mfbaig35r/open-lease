@@ -208,3 +208,38 @@ def test_chat_rejects_non_ready_deployment(cli):
     result = runner.invoke(app, ["chat", dep_id])
     assert result.exit_code == 1
     assert "not READY" in result.output
+
+
+def _deploy_id(runner, orch):
+    result = runner.invoke(app, ["deploy", "qwen3-0.6b", "--provider", "mock", "--wait"])
+    assert result.exit_code == 0
+    return orch.list_deployments(include_stopped=True)[0].id
+
+
+def test_schedule_set_shows_windows(cli):
+    runner, orch = cli
+    dep_id = _deploy_id(runner, orch)
+    result = runner.invoke(
+        app, ["schedule", dep_id, "--on", "mon-fri 06:00-18:00", "--tz", "America/New_York"]
+    )
+    assert result.exit_code == 0
+    assert "America/New_York" in result.output
+    assert "mon,tue,wed,thu,fri" in result.output
+    assert orch.get_deployment(dep_id).schedule is not None
+
+
+def test_schedule_clear_returns_to_manual(cli):
+    runner, orch = cli
+    dep_id = _deploy_id(runner, orch)
+    runner.invoke(app, ["schedule", dep_id, "--on", "all 00:00-23:59"])
+    result = runner.invoke(app, ["schedule", dep_id, "--clear"])
+    assert result.exit_code == 0
+    assert orch.get_deployment(dep_id).schedule is None
+
+
+def test_schedule_bad_window_fails_cleanly(cli):
+    runner, orch = cli
+    dep_id = _deploy_id(runner, orch)
+    result = runner.invoke(app, ["schedule", dep_id, "--on", "funday 06:00-18:00"])
+    assert result.exit_code == 1
+    assert orch.get_deployment(dep_id).schedule is None  # nothing persisted on bad input
