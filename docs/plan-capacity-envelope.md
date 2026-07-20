@@ -146,9 +146,17 @@ released when a streamed response completes and when a client disconnects mid-st
 
 ---
 
-## Tier B: real horizontal capacity. Medium lift, on-model, publish as near roadmap.
+## Tier B: real horizontal capacity. SHIPPED 2026-07-20.
 
-### B1. Replicas + load balancing
+Shipped with a lower-risk design than the original sketch: a replica is another deployment serving
+the same model (tied by nothing but the shared model id), not a second pod inside one deployment. The
+single-instance reconciler and the pure `next_step` stay untouched; the proxy pools same-model
+deployments and load-balances. This reuses all the per-deployment machinery (adoption, cost, health,
+naming) instead of rewriting the heart. B1 (`gpu scale` / `--replicas`) and B2 (`gpu autoscale`) both
+shipped. The one honest limitation, documented in code: autoscaling reads served request rate, so it
+tracks sustained load but not demand rejected at saturation, and it skips schedule-managed models.
+
+### B1. Replicas + load balancing: SHIPPED 2026-07-20
 
 Makes true: "multiple replicas," "add replicas during peak," "scale" (outline Section 5).
 
@@ -170,7 +178,7 @@ and pick per request.
 instance per deployment; each generalizes to a set. Do this as its own reviewed step (heart-of-system
 change, like the original reconciler), not folded into Tier A.
 
-### B2. Autoscaling (demand-driven replicas): depends on A3 + B1
+### B2. Autoscaling (demand-driven replicas): SHIPPED 2026-07-20
 
 Makes true: "add capacity during peak demand," the dynamic half of the capacity dial.
 

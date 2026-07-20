@@ -310,3 +310,22 @@ def test_scale_command_resizes_the_pool(cli):
     up = runner.invoke(app, ["scale", "qwen3-0.6b", "3"])
     assert up.exit_code == 0
     assert len([d for d in orch.list_deployments() if d.model_id == "qwen3-0.6b"]) == 3
+
+
+def test_autoscale_set_list_and_rm(cli):
+    runner, orch = cli
+    setr = runner.invoke(app, ["autoscale", "set", "qwen3-0.6b", "--max", "4", "--target", "30"])
+    assert setr.exit_code == 0
+    assert len(orch.list_autoscale()) == 1
+    listed = runner.invoke(app, ["autoscale", "list"])
+    assert listed.exit_code == 0 and "Autoscaling" in listed.output
+    rm = runner.invoke(app, ["autoscale", "rm", "qwen3-0.6b"])
+    assert rm.exit_code == 0
+    assert orch.list_autoscale() == []
+
+
+def test_autoscale_bad_target_fails_cleanly(cli):
+    runner, orch = cli
+    result = runner.invoke(app, ["autoscale", "set", "qwen3-0.6b", "--max", "2", "--target", "0"])
+    assert result.exit_code == 1
+    assert orch.list_autoscale() == []  # nothing persisted

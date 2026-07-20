@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from ..core.batch import BatchResult
     from ..core.budgets import BudgetStatus
+    from ..models import AutoscalePolicy
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -375,3 +376,23 @@ def limits_view(deployment: Deployment) -> None:
         f"queue=[cyan]{deployment.max_queue}[/cyan]  "
         f"timeout=[cyan]{deployment.queue_timeout_s:g}s[/cyan]"
     )
+
+
+def autoscale_table(policies: list[AutoscalePolicy]) -> None:
+    """Show demand-driven autoscaling policies (capacity plan, Tier B2)."""
+    if not policies:
+        console.print(
+            "[dim]No autoscaling. Set one with `gpu autoscale set <model> --max ...`.[/dim]"
+        )
+        return
+    table = Table(title="Autoscaling")
+    for col in ("MODEL", "MIN", "MAX", "TARGET REQ/MIN PER REPLICA"):
+        table.add_column(col)
+    for policy in policies:
+        table.add_row(
+            policy.model_id,
+            str(policy.min_replicas),
+            str(policy.max_replicas),
+            f"{policy.target_rpm_per_replica:g}",
+        )
+    console.print(table)

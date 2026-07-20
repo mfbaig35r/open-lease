@@ -40,6 +40,8 @@ app = typer.Typer(
 )
 budget_app = typer.Typer(no_args_is_help=True, help="Spend ceilings (capacity plan).")
 app.add_typer(budget_app, name="budget")
+autoscale_app = typer.Typer(no_args_is_help=True, help="Demand-driven replica autoscaling.")
+app.add_typer(autoscale_app, name="autoscale")
 
 _T = TypeVar("_T")
 _state = {"debug": False}
@@ -421,6 +423,48 @@ def budget_rm(budget_id: str) -> None:
         render.console.print(f"Removed budget [b]{budget_id}[/b].")
     else:
         _fail_msg(f"no budget with id {budget_id!r}")
+
+
+@autoscale_app.command("set")
+def autoscale_set(
+    model: str,
+    max_replicas: int = typer.Option(..., "--max", help="Most replicas to scale to."),
+    target: float = typer.Option(
+        ..., "--target", help="Requests per minute each replica should carry."
+    ),
+    min_replicas: int = typer.Option(1, "--min", help="Fewest replicas to keep warm."),
+) -> None:
+    """Autoscale a model's replicas to its served request rate. Needs the daemon running."""
+    try:
+        policy = _run(
+            _orchestrator().set_autoscale(
+                model_id=model,
+                max_replicas=max_replicas,
+                target_rpm_per_replica=target,
+                min_replicas=min_replicas,
+            )
+        )
+    except ValidationError as exc:
+        _fail_msg(str(exc.errors()[0]["msg"]))
+    render.console.print(
+        f"Autoscaling [b]{policy.model_id}[/b]: {policy.min_replicas} to {policy.max_replicas} "
+        f"replicas, target {policy.target_rpm_per_replica:g} req/min each."
+    )
+
+
+@autoscale_app.command("list")
+def autoscale_list() -> None:
+    """Show autoscaling policies."""
+    render.autoscale_table(_call(_orchestrator().list_autoscale))
+
+
+@autoscale_app.command("rm")
+def autoscale_rm(model: str) -> None:
+    """Remove a model's autoscaling policy."""
+    if _run(_orchestrator().remove_autoscale(model)):
+        render.console.print(f"Removed autoscaling for [b]{model}[/b].")
+    else:
+        _fail_msg(f"no autoscaling policy for {model!r}")
 
 
 # --- read commands --------------------------------------------------------------------

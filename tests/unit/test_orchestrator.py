@@ -291,3 +291,22 @@ async def test_scale_up_from_zero_raises(tmp_path):
     orch = _orch(tmp_path)
     with pytest.raises(ReconcileError):
         await orch.scale("qwen3-0.6b", 2)  # nothing to clone from
+
+
+async def test_set_list_and_remove_autoscale(tmp_path):
+    orch = _orch(tmp_path)
+    policy = await orch.set_autoscale(
+        model_id="qwen3-0.6b", max_replicas=4, target_rpm_per_replica=30.0
+    )
+    assert policy.max_replicas == 4 and policy.min_replicas == 1
+    assert [p.model_id for p in orch.list_autoscale()] == ["qwen3-0.6b"]
+    assert await orch.remove_autoscale("qwen3-0.6b") is True
+    assert orch.list_autoscale() == []
+
+
+async def test_set_autoscale_rejects_bad_bounds(tmp_path):
+    from pydantic import ValidationError
+
+    orch = _orch(tmp_path)
+    with pytest.raises(ValidationError):  # max_replicas 0 < min_replicas 1
+        await orch.set_autoscale(model_id="qwen3-0.6b", max_replicas=0, target_rpm_per_replica=30.0)

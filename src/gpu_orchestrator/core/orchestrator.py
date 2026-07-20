@@ -22,6 +22,7 @@ from ..errors import BudgetExceededError, OrchestratorError, ReconcileError
 from ..events import EventLog
 from ..logging import correlation_context, get_logger
 from ..models import (
+    AutoscalePolicy,
     Budget,
     BudgetAction,
     BudgetWindow,
@@ -327,6 +328,32 @@ class Orchestrator:
         """Delete a budget; returns True if one was removed. Any budget_hold it set clears on the
         daemon's next budget tick."""
         return self._store.delete_budget(budget_id)
+
+    async def set_autoscale(
+        self,
+        *,
+        model_id: str,
+        max_replicas: int,
+        target_rpm_per_replica: float,
+        min_replicas: int = 1,
+    ) -> AutoscalePolicy:
+        """Create or replace a model's autoscaling policy (capacity plan, Tier B2). The running
+        daemon keeps the replica count matched to served request rate within these bounds."""
+        policy = AutoscalePolicy(
+            model_id=model_id,
+            min_replicas=min_replicas,
+            max_replicas=max_replicas,
+            target_rpm_per_replica=target_rpm_per_replica,
+        )
+        self._store.save_autoscale_policy(policy)
+        return policy
+
+    async def remove_autoscale(self, model_id: str) -> bool:
+        """Delete a model's autoscaling policy; returns True if one was removed."""
+        return self._store.delete_autoscale_policy(model_id)
+
+    def list_autoscale(self) -> list[AutoscalePolicy]:
+        return self._store.list_autoscale_policies()
 
     def _enforce_budget_admission(self) -> None:
         """Refuse a new deploy while an account `block_new` budget is over its ceiling (a policy

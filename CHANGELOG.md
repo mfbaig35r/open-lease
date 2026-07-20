@@ -42,6 +42,17 @@ All notable changes to open-lease are documented here. The format follows
   429. A slot is held for the whole request including the streamed response, released exactly once
   when the stream ends (or the client disconnects), so slots never leak. `gpu limits <deployment>`
   shows the current limit; `--clear` removes it (unlimited). Off by default (no cap).
+- Replicas + load balancing (capacity plan, Tier B1): the OpenAI proxy pools every READY deployment
+  serving a model and round-robins across them, each keeping its own concurrency limiter so capacity
+  adds up. `gpu deploy <model> --replicas N` deploys a pool; `gpu scale <model> N` resizes it (scale
+  up clones an existing deployment's profile/limits/schedule, scale down stops the newest surplus).
+  A replica is just another deployment of the same model, so the reconciler and the pure decision
+  core are unchanged.
+- Autoscaling (capacity plan, Tier B2): `gpu autoscale set <model> --max N --target <req/min>`
+  keeps a model's replica count matched to its served request rate, between `--min` and `--max`,
+  with hysteresis. The daemon adds or removes replicas declaratively (the reconcile loop drives
+  them); `gpu autoscale list` / `rm` manage policies. The signal is served rate, so it tracks
+  sustained load; a schedule-managed model is left to its schedule.
 
 ### Changed
 - Bumped the default ad-hoc deploy image from `vllm/vllm-openai:v0.9.1` (mid-2025) to `v0.25.1`. The
