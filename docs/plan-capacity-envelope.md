@@ -200,22 +200,38 @@ both land.
 These are not "build later by default." Two of the three change what OpenLease *is* and should be a
 deliberate choice, not a backlog inheritance.
 
-### C1. Frontier fallback / multi-provider routing: build only the narrow case
+### C1. Frontier overflow: DECIDED 2026-07-20 (contract locked, build deferred)
 
-**The scope trap.** The moment the proxy routes to an external commercial API, OpenLease stops being
-a GPU-capacity control plane and becomes a general AI gateway, which is a crowded category with
-entrenched incumbents. The outline's "burst to a commercial API" and "route approved requests to a
-frontier API" imply that gateway.
+**Decision.** Build a narrow capacity **safety valve**, not a gateway, and build it when a real
+engagement pulls it. The contract below is locked so it is designed; it is not implemented yet
+(Tiers A + B already make the capacity story complete and publishable, so this stays demand-driven,
+per the build-against-engagements principle).
 
-**Recommendation.** Build only the narrow case the capacity story actually needs: a single configured
-OpenAI-compatible upstream that the proxy bursts to when the local pool is saturated (A3 queue full)
-or a budget's `on_exceed` degrades local capacity. Triggered deterministically, one upstream, off by
-default, opt-in per deployment. Do **not** build general provider routing or a task-complexity
-classifier (the latter also tends to want an LLM in the request path, which contradicts the "software
-operates infrastructure" thesis). For anything richer than narrow overflow, document that OpenLease
-sits behind an existing gateway rather than rebuilding one.
+**The line that keeps it on-thesis.** A gateway routes across providers by *request content* (model,
+cost, complexity), which is a crowded category off our thesis. A safety valve spills to one configured
+endpoint by *capacity state*. The trigger is the whole difference: this fires on capacity state only,
+never on request content. No content-based routing, no per-request model/cost/complexity decisions,
+no multi-provider routing, no LLM in the request path.
 
-**Status:** conceptual only; needs an explicit yes on the narrow-overflow scope before it is specced.
+**The locked contract:**
+- **Shape.** One configured OpenAI-compatible upstream (base URL + key), a global default with an
+  optional per-deployment override. Off by default, explicit opt-in.
+- **Trigger (capacity state only).** Overflow fires only when a deployment that *should be running*
+  cannot serve: the concurrency pool is saturated (the A3 limiter would 429), or its READY replicas
+  are *unexpectedly* absent (down / failed). It spills to the upstream instead of returning 429/503.
+- **Never on intentional-off (firm rule).** Overflow must NOT fire when local is deliberately down:
+  a budget `on_exceed=stop`, a schedule OFF window, or a manual stop. Those mean "do not spend," and
+  spilling over-budget or off-hours traffic to a *paid* API would contradict the ceiling. Intentional
+  stops still return 429/503.
+- **Metering (firm rule).** Overflow requests are external per-token spend, the exact cost
+  self-hosting exists to escape. They are metered on a separate channel, shown distinctly in
+  `gpu usage` / costs, and never counted as GPU utilization or into the crossover metric. An optional
+  overflow spend cap (a budget-like ceiling on overflow dollars) is part of the contract.
+- **Out of scope, permanently for this feature.** General provider routing, task-complexity
+  classification, cost-optimized per-request routing. For anything richer, document that OpenLease
+  sits behind an existing gateway rather than rebuilding one.
+
+**Status:** contract locked, build deferred until an engagement needs the valve.
 
 ### C2. Per-team / per-project quotas + identity: defer or integrate
 
