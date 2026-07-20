@@ -24,6 +24,12 @@ All notable changes to open-lease are documented here. The format follows
   traffic so a run shows up in `gpu usage`. Accepts full chat requests, `{"prompt": ...}` objects,
   or bare strings, with an optional `--system` prompt.
 
+### Changed
+- Bumped the default ad-hoc deploy image from `vllm/vllm-openai:v0.9.1` (mid-2025) to `v0.25.1`. The
+  old pin silently fails to load newer model architectures (a Dec-2025 model crash-looped until
+  redeployed with a current image). Still a deliberate pin, not `latest`; override per deploy with
+  `--image` when a model needs a different or nightly build.
+
 ## [0.3.0] - 2026-07-18
 
 ### Added

@@ -57,7 +57,10 @@ _TERMINAL_READY = {DeploymentState.READY, DeploymentState.FAILED}
 _TERMINAL_STOP = {DeploymentState.STOPPED, DeploymentState.FAILED}
 
 # Defaults for an ad-hoc (--hf-repo) deploy that has no catalog recipe.
-_ADHOC_IMAGE = "vllm/vllm-openai:v0.9.1"
+# Pinned to a recent stable vLLM release (reproducible), bumped deliberately rather than tracking
+# `latest`. Old pins silently fail to load newer model architectures, so keep this current; override
+# per deploy with `--image` when a model needs a different (or nightly) build.
+_ADHOC_IMAGE = "vllm/vllm-openai:v0.25.1"
 _ADHOC_DISK_GB = 60
 _ADHOC_STARTUP_SECONDS = 1800  # generous: an unknown model may be large / slow to download
 
