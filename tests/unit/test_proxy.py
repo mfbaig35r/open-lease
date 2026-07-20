@@ -4,6 +4,7 @@ live gauntlet showed is necessary (vLLM advertises the HF repo, not our catalog 
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -46,8 +47,9 @@ def _upstream() -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def _client(tmp_path) -> TestClient:
+def _client(tmp_path, **limits) -> TestClient:
     # Seed a READY deployment straight into the store, then point an Orchestrator at the same db.
+    # ``limits`` (max_concurrency / max_queue / queue_timeout_s) exercise the Tier A3 gate.
     store = Store(tmp_path / "proxy.db")
     store.save_deployment(
         Deployment(
@@ -64,6 +66,7 @@ def _client(tmp_path) -> TestClient:
                 state="RUNNING",
             ),
             endpoint_url=_ENDPOINT,
+            **limits,
         )
     )
     orch = Orchestrator(Config(namespace="test", state_db=tmp_path / "proxy.db"))
@@ -202,3 +205,56 @@ def test_non_ready_deployment_not_routable(tmp_path):
         ).status_code
         == 404
     )
+
+
+def test_limited_deployment_serves_and_releases_between_requests(tmp_path):
+    # With a cap of 1 and no concurrency, two sequential requests both succeed: the slot from the
+    # first must be released once its response finishes, or the second would 429.
+    client = _client(tmp_path, max_concurrency=1, max_queue=0)
+    for _ in range(2):
+        resp = client.post("/v1/chat/completions", json={"model": "qwen3-0.6b", "messages": []})
+        assert resp.status_code == 200
+
+
+async def test_over_concurrency_limit_returns_429(tmp_path):
+    gate = asyncio.Event()
+
+    async def slow_body():
+        yield b'{"choices":[{"message":{"content":"hi"}}],'
+        await gate.wait()  # hold the slot open until the test releases it
+        yield b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=slow_body(), headers={"content-type": "application/json"}
+        )
+
+    store = Store(tmp_path / "proxy.db")
+    store.save_deployment(
+        Deployment(
+            id="dep-p1",
+            model_id="qwen3-0.6b",
+            provider="mock",
+            desired_state=DeploymentState.READY,
+            observed_state=DeploymentState.READY,
+            profile=QWEN3_06B_PROFILE,
+            endpoint_url=_ENDPOINT,
+            max_concurrency=1,
+            max_queue=0,
+        )
+    )
+    orch = Orchestrator(Config(namespace="test", state_db=tmp_path / "proxy.db"))
+    app = create_proxy_app(orch, transport=httpx.MockTransport(handler))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        body = {"model": "qwen3-0.6b", "messages": []}
+        first = asyncio.create_task(client.post("/v1/chat/completions", json=body))
+        await asyncio.sleep(0.05)  # let the first request take the only slot and block on the gate
+
+        second = await client.post("/v1/chat/completions", json=body)
+        assert second.status_code == 429
+        assert second.json()["error"]["code"] == "concurrency_limit"
+
+        gate.set()  # release the first; its slot frees
+        assert (await first).status_code == 200

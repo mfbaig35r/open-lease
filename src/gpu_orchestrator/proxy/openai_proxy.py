@@ -27,6 +27,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from ..core import usage
+from .limiter import DeploymentLimiter, get_limiter
 
 if TYPE_CHECKING:
     from ..core.orchestrator import Orchestrator
@@ -58,11 +59,14 @@ def create_proxy_app(
     """Build the ASGI proxy over an Orchestrator's READY deployments. ``transport`` is the test seam
     (an httpx.MockTransport standing in for the upstream vLLM endpoints)."""
 
+    # Per-deployment concurrency gates, created lazily and kept for this proxy's lifetime (Tier A3).
+    limiters: dict[str, DeploymentLimiter] = {}
+
     async def models(_: Request) -> Response:
         return JSONResponse({"object": "list", "data": _ready_models(orchestrator)})
 
     async def forward(request: Request) -> Response:
-        return await _forward(orchestrator, request, transport)
+        return await _forward(orchestrator, request, transport, limiters)
 
     routes = [Route("/v1/models", models, methods=["GET"])]
     routes += [Route(path, forward, methods=["POST"]) for path in sorted(_FORWARDED_ROUTES)]
@@ -95,7 +99,10 @@ def _route_table(orchestrator: Orchestrator) -> dict[str, tuple[str, str, str]]:
 
 
 async def _forward(
-    orchestrator: Orchestrator, request: Request, transport: httpx.AsyncBaseTransport | None
+    orchestrator: Orchestrator,
+    request: Request,
+    transport: httpx.AsyncBaseTransport | None,
+    limiters: dict[str, DeploymentLimiter],
 ) -> Response:
     body = await request.body()
     payload = _parse(body)
@@ -114,6 +121,12 @@ async def _forward(
         )
 
     deployment_id, endpoint, served_model = route
+    # Concurrency envelope (Tier A3): take a slot before opening the upstream connection. A full
+    # queue or a timed-out wait is a 429. The slot is held until the streamed response finishes.
+    admitted, limiter = await _acquire_slot(orchestrator, deployment_id, limiters)
+    if not admitted:
+        return _too_many_requests(model)
+
     # Rewrite ONLY the model field to the id the backend serves (its HF repo); vLLM 404s on our
     # catalog id. This is the minimum the dual-key routing requires -- everything else is forwarded
     # unchanged. (Found live: byte-for-byte + catalog-id routing is self-contradictory.)
@@ -128,7 +141,13 @@ async def _forward(
         content=body,
         headers=_forward_headers(request.headers),
     )
-    upstream = await client.send(upstream_request, stream=True)
+    try:
+        upstream = await client.send(upstream_request, stream=True)
+    except Exception:  # never leak a held slot if the upstream never opened
+        if limiter is not None:
+            limiter.release()
+        await client.aclose()
+        raise
 
     headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
     headers["x-gpu-orch-deployment-id"] = deployment_id
@@ -142,8 +161,46 @@ async def _forward(
         status_code=upstream.status_code,
         headers=headers,
         background=BackgroundTask(
-            _finish, upstream, client, orchestrator if metered else None, deployment_id, buf
+            _finish,
+            upstream,
+            client,
+            orchestrator if metered else None,
+            deployment_id,
+            buf,
+            limiter,
         ),
+    )
+
+
+async def _acquire_slot(
+    orchestrator: Orchestrator, deployment_id: str, limiters: dict[str, DeploymentLimiter]
+) -> tuple[bool, DeploymentLimiter | None]:
+    """Take a concurrency slot for the routed deployment. Returns ``(admitted, limiter)``: the
+    limiter must be released later when admitted with a limit; ``(True, None)`` when the deployment
+    sets no limit; ``(False, None)`` when the request must be rejected (429)."""
+    deployment = orchestrator.get_deployment(deployment_id)
+    if deployment.max_concurrency is None:
+        return True, None
+    limiter = get_limiter(
+        limiters,
+        deployment_id,
+        deployment.max_concurrency,
+        deployment.max_queue,
+        deployment.queue_timeout_s,
+    )
+    return (True, limiter) if await limiter.acquire() else (False, None)
+
+
+def _too_many_requests(model: str | None) -> Response:
+    return JSONResponse(
+        {
+            "error": {
+                "message": f"{model!r} is at its concurrency limit; retry shortly",
+                "type": "rate_limit_error",
+                "code": "concurrency_limit",
+            }
+        },
+        status_code=429,
     )
 
 
@@ -159,11 +216,19 @@ async def _finish(
     orchestrator: Orchestrator | None,
     deployment_id: str,
     buf: list[bytes],
+    limiter: DeploymentLimiter | None,
 ) -> None:
-    await upstream.aclose()
-    await client.aclose()
-    if orchestrator is not None and buf:
-        orchestrator.record_proxy_usage(deployment_id, b"".join(buf))
+    """Runs after the response stream drains (starlette runs it even on client disconnect), so this
+    is the one place a held concurrency slot is released. The release is in ``finally`` so a failure
+    to close or meter can never leak the slot."""
+    try:
+        await upstream.aclose()
+        await client.aclose()
+        if orchestrator is not None and buf:
+            orchestrator.record_proxy_usage(deployment_id, b"".join(buf))
+    finally:
+        if limiter is not None:
+            limiter.release()
 
 
 def _parse(body: bytes) -> dict | None:

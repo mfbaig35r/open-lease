@@ -390,6 +390,12 @@ class Deployment(BaseModel):
     # precedence over the schedule (a ceiling outranks a plan), so a held deployment stays STOPPED
     # even inside an ON window. Cleared when the budget window resets or the budget is lifted.
     budget_hold: bool = False
+    # Concurrency envelope (Tier A3), enforced by the OpenAI proxy. ``max_concurrency`` None means
+    # unlimited (no gate). Up to ``max_queue`` requests wait up to ``queue_timeout_s`` for a slot;
+    # anything beyond gets a 429. A slot is held for the whole request, streamed response included.
+    max_concurrency: int | None = None
+    max_queue: int = 0
+    queue_timeout_s: float = 30.0
     # Count of unexpected runtime deaths (a created pod that vanished before reaching READY, e.g. an
     # OOM crash loop) since the last healthy READY. Distinct from ``failure.attempts``, which counts
     # only provider CREATE errors: a successful create clears ``failure`` next tick, so it can never
@@ -398,6 +404,27 @@ class Deployment(BaseModel):
     runtime_failures: int = 0
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
+
+    @field_validator("max_concurrency")
+    @classmethod
+    def _positive_concurrency(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError("max_concurrency must be at least 1 (or None for unlimited)")
+        return v
+
+    @field_validator("max_queue")
+    @classmethod
+    def _nonnegative_queue(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("max_queue cannot be negative")
+        return v
+
+    @field_validator("queue_timeout_s")
+    @classmethod
+    def _positive_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("queue_timeout_s must be greater than 0")
+        return v
 
 
 # =====================================================================================
