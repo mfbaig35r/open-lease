@@ -59,14 +59,16 @@ def create_proxy_app(
     """Build the ASGI proxy over an Orchestrator's READY deployments. ``transport`` is the test seam
     (an httpx.MockTransport standing in for the upstream vLLM endpoints)."""
 
-    # Per-deployment concurrency gates, created lazily and kept for this proxy's lifetime (Tier A3).
+    # Per-deployment concurrency gates (Tier A3) and per-model round-robin counters (Tier B),
+    # created lazily and kept for this proxy's lifetime.
     limiters: dict[str, DeploymentLimiter] = {}
+    rr_state: dict[str, int] = {}
 
     async def models(_: Request) -> Response:
         return JSONResponse({"object": "list", "data": _ready_models(orchestrator)})
 
     async def forward(request: Request) -> Response:
-        return await _forward(orchestrator, request, transport, limiters)
+        return await _forward(orchestrator, request, transport, limiters, rr_state)
 
     routes = [Route("/v1/models", models, methods=["GET"])]
     routes += [Route(path, forward, methods=["POST"]) for path in sorted(_FORWARDED_ROUTES)]
@@ -74,28 +76,46 @@ def create_proxy_app(
 
 
 def _ready_models(orchestrator: Orchestrator) -> list[dict]:
-    """One entry per READY deployment, keyed by catalog id (what `gpu models` shows)."""
-    return [
-        {"id": d.model_id, "object": "model", "owned_by": "gpu-orchestrator", "deployment_id": d.id}
-        for d in orchestrator.list_deployments()
-        if d.observed_state.value == "ready" and d.endpoint_url
-    ]
-
-
-def _route_table(orchestrator: Orchestrator) -> dict[str, tuple[str, str, str]]:
-    """model-name -> (deployment_id, endpoint_url, served_model) for every READY deployment, keyed
-    by both its catalog id and its HF repo. ``served_model`` is what the backend actually serves
-    (the HF repo), which the request's ``model`` field is rewritten to. Rebuilt per request so
-    routing always reflects live state."""
-    hf_repo = {spec.id: spec.hf_repo for spec in orchestrator.list_models()}
-    table: dict[str, tuple[str, str, str]] = {}
+    """One entry per READY model, deduped across replicas (Tier B): several deployments serving the
+    same model appear once in `/v1/models`, keyed by catalog id (what `gpu models` shows)."""
+    seen: dict[str, dict] = {}
     for d in orchestrator.list_deployments():
+        if d.observed_state.value == "ready" and d.endpoint_url:
+            seen.setdefault(
+                d.model_id,
+                {"id": d.model_id, "object": "model", "owned_by": "gpu-orchestrator"},
+            )
+    return list(seen.values())
+
+
+def _route_table(orchestrator: Orchestrator) -> dict[str, list[tuple[str, str, str]]]:
+    """model-name -> list of (deployment_id, endpoint_url, served_model) for every READY deployment
+    serving it, keyed by both its catalog id and its HF repo. More than one entry means replicas of
+    the same model (Tier B); the proxy load-balances across the list. ``served_model`` is what the
+    backend actually serves (the HF repo), which the request's ``model`` field is rewritten to.
+    Sorted by deployment id so the round-robin rotation is stable. Rebuilt per request so routing
+    always reflects live state."""
+    hf_repo = {spec.id: spec.hf_repo for spec in orchestrator.list_models()}
+    table: dict[str, list[tuple[str, str, str]]] = {}
+    for d in sorted(orchestrator.list_deployments(), key=lambda d: d.id):
         if d.observed_state.value != "ready" or not d.endpoint_url:
             continue
         served = d.hf_repo or hf_repo.get(d.model_id, d.model_id)
-        table[d.model_id] = (d.id, d.endpoint_url, served)
-        table[served] = (d.id, d.endpoint_url, served)
+        entry = (d.id, d.endpoint_url, served)
+        table.setdefault(d.model_id, []).append(entry)
+        if served != d.model_id:
+            table.setdefault(served, []).append(entry)
     return table
+
+
+def _pick(
+    pool: list[tuple[str, str, str]], model: str, rr_state: dict[str, int]
+) -> tuple[str, str, str]:
+    """Round-robin one entry from a model's replica pool. State is a per-model counter held for the
+    proxy's lifetime, so successive requests for the same model spread across its replicas."""
+    index = rr_state.get(model, 0)
+    rr_state[model] = index + 1
+    return pool[index % len(pool)]
 
 
 async def _forward(
@@ -103,12 +123,13 @@ async def _forward(
     request: Request,
     transport: httpx.AsyncBaseTransport | None,
     limiters: dict[str, DeploymentLimiter],
+    rr_state: dict[str, int],
 ) -> Response:
     body = await request.body()
     payload = _parse(body)
     model = payload.get("model") if payload else None
-    route = _route_table(orchestrator).get(model) if model else None
-    if route is None:
+    pool = _route_table(orchestrator).get(model) if model else None
+    if not pool:
         return JSONResponse(
             {
                 "error": {
@@ -120,7 +141,8 @@ async def _forward(
             status_code=404,
         )
 
-    deployment_id, endpoint, served_model = route
+    # Load-balance across replicas of this model (Tier B); each keeps its own concurrency limiter.
+    deployment_id, endpoint, served_model = _pick(pool, model, rr_state)
     # Concurrency envelope (Tier A3): take a slot before opening the upstream connection. A full
     # queue or a timed-out wait is a 429. The slot is held until the streamed response finishes.
     admitted, limiter = await _acquire_slot(orchestrator, deployment_id, limiters)

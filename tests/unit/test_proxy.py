@@ -258,3 +258,45 @@ async def test_over_concurrency_limit_returns_429(tmp_path):
 
         gate.set()  # release the first; its slot frees
         assert (await first).status_code == 200
+
+
+def _seed_replica(store, dep_id, endpoint, model_id="qwen3-0.6b"):
+    store.save_deployment(
+        Deployment(
+            id=dep_id,
+            model_id=model_id,
+            provider="mock",
+            desired_state=DeploymentState.READY,
+            observed_state=DeploymentState.READY,
+            profile=QWEN3_06B_PROFILE,
+            endpoint_url=endpoint,
+        )
+    )
+
+
+def test_load_balances_across_replicas(tmp_path):
+    # Two READY deployments serving the same model are a replica pool; the proxy round-robins across
+    # them, so successive requests land on different pods (Tier B).
+    store = Store(tmp_path / "proxy.db")
+    _seed_replica(store, "dep-p1", "http://pod-a:8000")
+    _seed_replica(store, "dep-p2", "http://pod-b:8000")
+    orch = Orchestrator(Config(namespace="test", state_db=tmp_path / "proxy.db"))
+    client = TestClient(create_proxy_app(orch, transport=_upstream()))
+
+    seen = set()
+    for _ in range(4):
+        resp = client.post("/v1/chat/completions", json={"model": "qwen3-0.6b", "messages": []})
+        assert resp.status_code == 200
+        seen.add(resp.headers["x-gpu-orch-deployment-id"])
+    assert seen == {"dep-p1", "dep-p2"}  # both replicas received traffic
+
+
+def test_models_dedupes_replicas(tmp_path):
+    store = Store(tmp_path / "proxy.db")
+    _seed_replica(store, "dep-p1", "http://pod-a:8000")
+    _seed_replica(store, "dep-p2", "http://pod-b:8000")
+    orch = Orchestrator(Config(namespace="test", state_db=tmp_path / "proxy.db"))
+    client = TestClient(create_proxy_app(orch, transport=_upstream()))
+
+    ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+    assert ids == ["qwen3-0.6b"]  # one entry, not one per replica

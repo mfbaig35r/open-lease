@@ -118,10 +118,10 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
     async def chat_completion(model: str, messages: list[dict]) -> dict:
         """Chat with a READY deployment. ``model`` is the catalog id or the HF repo; ``messages`` is
         the OpenAI chat format. Routes to the matching deployment's endpoint."""
-        route = _route_table(orchestrator).get(model)
-        if route is None:
+        pool = _route_table(orchestrator).get(model)
+        if not pool:
             return {"error": f"model {model!r} is not a READY deployment (try list_deployments)"}
-        _deployment_id, endpoint, served = route
+        _deployment_id, endpoint, served = pool[0]  # first ready replica (Tier B)
         async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
             resp = await client.post(
                 f"{endpoint}/v1/chat/completions", json={"model": served, "messages": messages}
