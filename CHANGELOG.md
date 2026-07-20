@@ -36,6 +36,12 @@ All notable changes to open-lease are documented here. The format follows
   the rest of the window (a budget stop outranks a schedule), `block_new` refuses new deploys while
   over budget. `gpu budget list` shows spend so far this window; `gpu budget rm <id>` removes one.
   The daemon evaluates budgets each tick and enforces `stop` via a hold that the reconciler drives.
+- Concurrency limits (capacity plan, Tier A3): `gpu limits <deployment> --max 16 --queue 64
+  --timeout 30` caps in-flight requests per deployment in the OpenAI proxy. It admits up to `--max`
+  at once; up to `--queue` more wait up to `--timeout` seconds for a slot; anything beyond gets a
+  429. A slot is held for the whole request including the streamed response, released exactly once
+  when the stream ends (or the client disconnects), so slots never leak. `gpu limits <deployment>`
+  shows the current limit; `--clear` removes it (unlimited). Off by default (no cap).
 
 ### Changed
 - Bumped the default ad-hoc deploy image from `vllm/vllm-openai:v0.9.1` (mid-2025) to `v0.25.1`. The

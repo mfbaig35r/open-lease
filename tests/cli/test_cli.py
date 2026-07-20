@@ -271,3 +271,24 @@ def test_budget_rm(cli):
     result = runner.invoke(app, ["budget", "rm", budget_id])
     assert result.exit_code == 0
     assert orch.list_budgets() == []
+
+
+def test_limits_set_show_and_clear(cli):
+    runner, orch = cli
+    dep_id = _deploy_id(runner, orch)
+    setr = runner.invoke(app, ["limits", dep_id, "--max", "8", "--queue", "32"])
+    assert setr.exit_code == 0
+    assert orch.get_deployment(dep_id).max_concurrency == 8
+    shown = runner.invoke(app, ["limits", dep_id])
+    assert shown.exit_code == 0 and "max=" in shown.output
+    clr = runner.invoke(app, ["limits", dep_id, "--clear"])
+    assert clr.exit_code == 0
+    assert orch.get_deployment(dep_id).max_concurrency is None
+
+
+def test_limits_bad_value_fails_cleanly(cli):
+    runner, orch = cli
+    dep_id = _deploy_id(runner, orch)
+    result = runner.invoke(app, ["limits", dep_id, "--max", "0"])
+    assert result.exit_code == 1
+    assert orch.get_deployment(dep_id).max_concurrency is None  # nothing persisted

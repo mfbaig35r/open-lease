@@ -235,6 +235,29 @@ class Orchestrator:
         self._store.save_deployment(deployment)
         return deployment
 
+    async def set_limits(
+        self,
+        deployment_id: str,
+        *,
+        max_concurrency: int | None,
+        max_queue: int = 0,
+        queue_timeout_s: float = 30.0,
+    ) -> Deployment:
+        """Set (or clear, with ``max_concurrency=None``) a deployment's concurrency envelope (Tier
+        A3), enforced by the OpenAI proxy. Re-validated through the model so a bad value is rejected
+        now, not on the next load. A live proxy picks up the change on its next restart."""
+        current = self._store.get_deployment(deployment_id)
+        updated = Deployment.model_validate(
+            {
+                **current.model_dump(),
+                "max_concurrency": max_concurrency,
+                "max_queue": max_queue,
+                "queue_timeout_s": queue_timeout_s,
+            }
+        )
+        self._store.save_deployment(updated)
+        return updated
+
     async def set_budget(
         self,
         *,

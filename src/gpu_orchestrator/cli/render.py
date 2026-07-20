@@ -362,3 +362,16 @@ def budgets_table(statuses: list[BudgetStatus]) -> None:
             state,
         )
     console.print(table)
+
+
+def limits_view(deployment: Deployment) -> None:
+    """Show a deployment's concurrency limit (capacity plan, Tier A3), or that it has none."""
+    if deployment.max_concurrency is None:
+        console.print(f"[dim]{deployment.id} has no concurrency limit (unlimited).[/dim]")
+        return
+    console.print(
+        f"[b]{deployment.id}[/b] concurrency  "
+        f"max=[cyan]{deployment.max_concurrency}[/cyan]  "
+        f"queue=[cyan]{deployment.max_queue}[/cyan]  "
+        f"timeout=[cyan]{deployment.queue_timeout_s:g}s[/cyan]"
+    )

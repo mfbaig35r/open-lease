@@ -108,10 +108,21 @@ cost-safe). Accrual source of truth stays `cost_records`; no parallel meter.
 **Contract test first.** A test that seeds `cost_records` past a limit and asserts the correct event
 + action per `on_exceed`; a test that `block_new` refuses a deploy while an open deployment continues.
 
-### A3. Concurrency limits + bounded queue
+### A3. Concurrency limits + bounded queue: SHIPPED 2026-07-19
 
 Makes true: "controlled concurrency envelope," "enforce concurrency limits," "queue excess work"
-(outline Sections 5, core thesis).
+(outline Sections 5, core thesis). Shipped as `gpu limits <deployment> --max N [--queue M]
+[--timeout S] [--clear]`. The streaming-slot lifecycle (the flagged hard part) is handled: a slot is
+acquired before the upstream opens and released exactly once in the background task starlette runs
+even on client disconnect, in a `finally` so a close/meter error cannot leak it; a send failure
+before streaming also releases. Relies on `asyncio.Semaphore` cancellation-safety (3.11+). Full:
+`Deployment.max_concurrency/max_queue/queue_timeout_s` (validated), `proxy/limiter.py`
+(`DeploymentLimiter` + registry), proxy `_acquire_slot`/`_finish` wiring (`_route_table` shape
+unchanged so the MCP chat tool is untouched), orchestrator `set_limits`, `render.limits_view`.
+
+**With A3 shipped, Tier A is complete:** the flagship post's "predictable ceiling / capacity
+envelope / controlled concurrency" claims are all true, not aspirational. Tiers B and C remain
+roadmap.
 
 **Concept.** Per-deployment in-flight request cap in the OpenAI proxy, with a bounded wait queue
 (max depth + max wait); requests over the queue bound return `429`. This is the server-side twin of

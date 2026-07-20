@@ -313,6 +313,44 @@ def schedule(
     render.schedule_view(dep)
 
 
+@app.command()
+def limits(
+    deployment_id: str,
+    max_requests: int = typer.Option(
+        None, "--max", help="Max concurrent requests in flight (the cap)."
+    ),
+    queue: int = typer.Option(0, "--queue", help="Extra requests that may wait for a slot."),
+    timeout: float = typer.Option(30.0, "--timeout", help="Seconds a request waits before a 429."),
+    clear: bool = typer.Option(False, "--clear", help="Remove the limit (unlimited)."),
+) -> None:
+    """Set, show, or clear a deployment's concurrency limit.
+
+    The proxy admits at most `--max` requests at once; up to `--queue` more wait up to `--timeout`
+    seconds for a slot, and anything beyond gets a 429. With no options, prints the current limit. A
+    running proxy picks up a change on its next restart.
+    """
+    orch = _orchestrator()
+    if clear:
+        dep = _run(orch.set_limits(deployment_id, max_concurrency=None))
+        render.console.print(f"Cleared concurrency limit on [b]{dep.id}[/b] (unlimited).")
+        return
+    if max_requests is None:
+        render.limits_view(_call(orch.get_deployment, deployment_id))
+        return
+    try:
+        dep = _run(
+            orch.set_limits(
+                deployment_id,
+                max_concurrency=max_requests,
+                max_queue=queue,
+                queue_timeout_s=timeout,
+            )
+        )
+    except ValidationError as exc:
+        _fail_msg(str(exc.errors()[0]["msg"]))
+    render.limits_view(dep)
+
+
 @budget_app.command("set")
 def budget_set(
     limit: float = typer.Option(..., "--limit", help="Ceiling in USD."),

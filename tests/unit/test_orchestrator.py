@@ -238,3 +238,24 @@ async def test_warn_budget_does_not_block_deploy(tmp_path):
     await orch.set_budget(limit_usd=1.0, window=BudgetWindow.MONTHLY, on_exceed=BudgetAction.WARN)
     dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)  # not blocked
     assert dep.observed_state is S.REQUESTED
+
+
+async def test_set_and_clear_limits(tmp_path):
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)
+    updated = await orch.set_limits(dep.id, max_concurrency=8, max_queue=32, queue_timeout_s=15.0)
+    assert updated.max_concurrency == 8
+    reloaded = orch.get_deployment(dep.id)
+    assert (reloaded.max_concurrency, reloaded.max_queue, reloaded.queue_timeout_s) == (8, 32, 15.0)
+
+    cleared = await orch.set_limits(dep.id, max_concurrency=None)
+    assert cleared.max_concurrency is None  # unlimited again
+
+
+async def test_set_limits_rejects_bad_value(tmp_path):
+    from pydantic import ValidationError
+
+    orch = _orch(tmp_path)
+    dep = await orch.deploy_model("qwen3-0.6b", provider="mock", wait=False)
+    with pytest.raises(ValidationError):  # validated at set time, not on next load
+        await orch.set_limits(dep.id, max_concurrency=0)
