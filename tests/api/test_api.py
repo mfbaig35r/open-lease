@@ -172,3 +172,148 @@ def test_bearer_auth(tmp_path):
     ok = client.get("/models", headers={"Authorization": "Bearer s3cret"})
     assert ok.status_code == 200
     assert client.get("/models", headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+
+# --- capacity envelope (plan tiers A + B): parity with the CLI -------------------------
+
+
+def _deploy(client) -> str:
+    return client.post(
+        "/deployments", json={"model_id": "qwen3-0.6b", "provider": "mock", "wait": True}
+    ).json()["id"]
+
+
+def test_schedule_set_and_clear(tmp_path):
+    client = _client(tmp_path)
+    dep_id = _deploy(client)
+    resp = client.put(
+        f"/deployments/{dep_id}/schedule",
+        json={
+            "timezone": "America/New_York",
+            "default_posture": "off",
+            "rules": [{"days": [0, 1, 2, 3, 4], "start": "06:00", "end": "18:00", "posture": "on"}],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["schedule"]["timezone"] == "America/New_York"
+    assert client.get(f"/deployments/{dep_id}").json()["schedule"]["rules"][0]["start"] == "06:00"
+
+    cleared = client.delete(f"/deployments/{dep_id}/schedule")
+    assert cleared.status_code == 200
+    assert cleared.json()["schedule"] is None
+
+
+def test_schedule_rejects_bad_timezone(tmp_path):
+    client = _client(tmp_path)
+    dep_id = _deploy(client)
+    resp = client.put(
+        f"/deployments/{dep_id}/schedule", json={"timezone": "Mars/Olympus", "rules": []}
+    )
+    assert resp.status_code == 422  # the DTO is the domain model, so FastAPI rejects it up front
+
+
+def test_limits_set_and_clear(tmp_path):
+    client = _client(tmp_path)
+    dep_id = _deploy(client)
+    resp = client.put(
+        f"/deployments/{dep_id}/limits",
+        json={"max_concurrency": 16, "max_queue": 64, "queue_timeout_s": 5},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["max_concurrency"] == 16
+    assert resp.json()["max_queue"] == 64
+
+    cleared = client.delete(f"/deployments/{dep_id}/limits")
+    assert cleared.json()["max_concurrency"] is None
+
+
+def test_limits_reject_bad_value_as_400(tmp_path):
+    client = _client(tmp_path)
+    dep_id = _deploy(client)
+    resp = client.put(f"/deployments/{dep_id}/limits", json={"max_concurrency": 0})
+    assert resp.status_code == 400  # the domain model's validator, surfaced as a clean error
+    assert "error" in resp.json()
+
+
+def test_scale_replicas(tmp_path):
+    client = _client(tmp_path)
+    _deploy(client)
+    resp = client.post("/scale", json={"model_id": "qwen3-0.6b", "replicas": 3, "wait": True})
+    assert resp.status_code == 200
+    assert len(resp.json()) == 3
+    assert len(client.get("/deployments").json()) == 3
+
+    down = client.post("/scale", json={"model_id": "qwen3-0.6b", "replicas": 1})
+    assert len(down.json()) == 1
+
+
+def test_scale_without_a_member_is_400(tmp_path):
+    resp = _client(tmp_path).post("/scale", json={"model_id": "qwen3-0.6b", "replicas": 2})
+    assert resp.status_code == 400
+    assert "deploy one first" in resp.json()["error"]
+
+
+def test_budget_crud(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/budgets", json={"limit_usd": 500, "window": "monthly", "on_exceed": "stop"}
+    )
+    assert created.status_code == 200
+    budget_id = created.json()["id"]
+    assert created.json()["deployment_id"] is None  # account-wide
+
+    listed = client.get("/budgets").json()
+    assert listed[0]["budget"]["id"] == budget_id
+    assert listed[0]["exceeded"] is False
+    assert "spent_usd" in listed[0]  # the status snapshot, not just the record
+
+    assert client.delete(f"/budgets/{budget_id}").status_code == 204
+    assert client.get("/budgets").json() == []
+    assert client.delete(f"/budgets/{budget_id}").status_code == 404
+
+
+def test_budget_rejects_non_positive_limit(tmp_path):
+    resp = _client(tmp_path).post("/budgets", json={"limit_usd": 0, "window": "daily"})
+    assert resp.status_code == 400
+    assert "greater than 0" in resp.json()["error"]
+
+
+def test_autoscale_crud(tmp_path):
+    client = _client(tmp_path)
+    resp = client.put(
+        "/autoscale/qwen3-0.6b",
+        json={"max_replicas": 4, "target_rpm_per_replica": 30, "min_replicas": 2},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "schema_version": resp.json()["schema_version"],
+        "model_id": "qwen3-0.6b",
+        "min_replicas": 2,
+        "max_replicas": 4,
+        "target_rpm_per_replica": 30.0,
+    }
+    assert client.get("/autoscale").json()[0]["model_id"] == "qwen3-0.6b"
+    assert client.delete("/autoscale/qwen3-0.6b").status_code == 204
+    assert client.get("/autoscale").json() == []
+    assert client.delete("/autoscale/qwen3-0.6b").status_code == 404
+
+
+def test_volume_delete(tmp_path):
+    client = _client(tmp_path)
+    assert client.get("/volumes").json() == []
+    assert client.delete("/volumes/vol-1").status_code == 204  # idempotent, like the provider
+
+
+def test_capacity_routes_are_token_guarded_behind_the_ui(tmp_path):
+    """The UI-served build only guards the API prefixes, so a new prefix that is not listed would be
+    reachable with no token. Every capacity route is under a guarded prefix."""
+    ui = tmp_path / "web"
+    ui.mkdir()
+    (ui / "index.html").write_text("ok")
+    cfg = Config(
+        namespace="test", state_db=tmp_path / "api.db", reconcile_interval=0, api_token="secret"
+    )
+    orch = Orchestrator(cfg, provider=MockProvider(namespace="test"), runtime=_runtime())
+    client = TestClient(create_app(orch, ui_dir=ui))
+    for path in ("/budgets", "/autoscale", "/scale"):
+        assert client.get(path).status_code == 401, path

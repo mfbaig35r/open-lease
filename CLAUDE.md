@@ -178,10 +178,11 @@ region-pinning tradeoff. Cache mechanism proven live; warm speedup pending capac
 
 ## MCP server (Phase 3, shipped 2026-07-05)
 
-`mcp/server.py` is a FastMCP server: `create_server(orchestrator)` exposing 14 agent-facing tools,
-each a thin wrapper over one Orchestrator method (deploy/stop/restart/delete_deployment,
-list_models, list_deployments, get_deployment, deployment_logs, deployment_health, provider_status,
-gpu_availability, estimate_cost, get_costs, chat_completion). Tools return `model_dump(mode="json")`
+`mcp/server.py` is a FastMCP server: `create_server(orchestrator)` exposing agent-facing tools, each
+a thin wrapper over one Orchestrator method (deploy/stop/restart/delete_deployment, list_models,
+list_deployments, get_deployment, deployment_logs, deployment_health, deployment_events,
+provider_status, gpu_availability, list_volumes, estimate_cost, get_costs, get_usage,
+chat_completion, plus the capacity-envelope tools below). Tools return `model_dump(mode="json")`
 dicts; `delete_deployment` requires `confirm=true` (destructive). `chat_completion` reuses the
 proxy's `_route_table` for model-name routing. Runs over stdio via the `gpu-mcp` entry point or
 `gpu mcp`. Tested with FastMCP's in-memory `Client` against a mock-backed core. Same core, agent
@@ -191,12 +192,41 @@ shape.
 
 `api/app.py` is a thin FastAPI layer: `create_app(orchestrator)` with routes mirroring the
 Orchestrator 1:1 (`/deployments` CRUD + `/stop`,`/restart`,`/logs`,`/health`,`/events`; `/models`,
-`/providers`, `/availability`, `/costs`, `/volumes`, `/estimate`), request/response bodies are the
-§6 Pydantic models (only `DeployRequest`/`EstimateRequest` are interface DTOs), and the OpenAI proxy
-is mounted at `/v1/*`. Auth is a single static bearer token (`api_token`; open when unset, so
-`api_host` defaults to localhost). `OrchestratorError` maps to 404/400 via one exception handler.
-`gpu serve` runs it via uvicorn; auto-docs at `/docs`. Interfaces stay thin: same core, different
-shape. Phase 4 (Swamp) consumes this API and is now unblocked.
+`/providers`, `/availability`, `/costs`, `/usage`, `/volumes`, `/estimate`), request/response bodies
+are the §6 Pydantic models (only `DeployRequest`/`EstimateRequest`/the capacity DTOs are interface
+DTOs), and the OpenAI proxy is mounted at `/v1/*`. Auth is a single static bearer token (`api_token`;
+open when unset, so `api_host` defaults to localhost). `OrchestratorError` maps to 404/400 via one
+exception handler. `gpu serve` runs it via uvicorn; auto-docs at `/docs`. Interfaces stay thin: same
+core, different shape. Phase 4 (Swamp) consumes this API and is now unblocked.
+
+## Interface parity (shipped 2026-07-24)
+
+**Rule: anything the Orchestrator exposes is reachable from every interface.** Tiers A + B landed on
+the CLI first, which left the REST API and MCP able to spend but not to cap, so the capacity envelope
+is now on all three:
+
+- **REST.** `PUT/DELETE /deployments/{id}/schedule`, `PUT/DELETE /deployments/{id}/limits`,
+  `POST /scale`, `GET/POST /budgets` + `DELETE /budgets/{id}`, `GET /autoscale` +
+  `PUT/DELETE /autoscale/{model_id}`, `DELETE /volumes/{id}`. Schedules take the `Schedule` model
+  directly (no parallel schema); limits/scale/budgets/autoscale take small DTOs because their
+  Orchestrator methods take keyword arguments rather than one model.
+- **MCP.** `set_schedule` / `clear_schedule`, `set_limits` / `clear_limits`, `scale_model`,
+  `set_budget` / `list_budgets` / `remove_budget`, `set_autoscale` / `list_autoscale` /
+  `remove_autoscale`, plus `deployment_events` and `list_volumes`.
+
+Three supporting changes:
+- The window-spec parser (`"mon-fri 06:00-18:00"`) moved from `cli/main.py` to `core/schedule.py` as
+  `build_schedule`, so the CLI and the MCP tool share one parser and report identical messages.
+- `budgets.BudgetStatus` is a Pydantic model, not a dataclass, so REST and MCP can return the spend
+  snapshot as-is.
+- New `PolicyNotFoundError` (a budget/autoscale id that does not exist) maps to 404, and a
+  `ValidationError` handler maps a domain validator rejection to 400 instead of a 500. **When adding
+  a route prefix, add it to `_API_PREFIXES`** or it is unauthenticated in the UI-served build; a test
+  guards this.
+
+Deliberately not on every surface (tracked, not silently missing): `run_batch` is CLI-only until it
+has a job resource to poll (a fan-out over thousands of prompts outlives a request/tool call), and
+`delete_volume` is CLI + REST but not MCP (a shared model cache is not an agent's to destroy).
 
 ## SQLite store beyond state (migration v2)
 

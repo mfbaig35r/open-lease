@@ -67,7 +67,9 @@ gpu down          # stop both
 - **Runtime seam** (`runtimes/`): serves a model on compute, knows nothing about providers. vLLM.
 - **Interfaces**: the `gpu` CLI, a REST API (`gpu serve`, routes mirroring the Orchestrator, the
   OpenAI proxy mounted at `/v1/*`, auto-docs at `/docs`), and an MCP server (`gpu-mcp`, agent-facing
-  tools over the same core). A Swamp extension is specified for later and consumes the REST API.
+  tools over the same core). All three reach the same surface, capacity controls included, so an
+  agent or an HTTP client can set a ceiling and not just spend. A Swamp extension is specified for
+  later and consumes the REST API.
 
 See [docs/architecture.md](docs/architecture.md) for the full picture, and
 [requirements/gpu-orchestrator-requirements.md](requirements/gpu-orchestrator-requirements.md) for

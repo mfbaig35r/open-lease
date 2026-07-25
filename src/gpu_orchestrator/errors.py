@@ -61,6 +61,11 @@ class ReconcileError(OrchestratorError):
     """The reconciler could not make progress for a reason that is not a provider/runtime fault."""
 
 
+class PolicyNotFoundError(OrchestratorError):
+    """No capacity policy (budget, autoscaling) with the given id. Its own error rather than
+    ``DeploymentNotFoundError`` because a policy is not scoped to one deployment."""
+
+
 class BudgetExceededError(OrchestratorError):
     """A new deploy was refused because an account budget with ``on_exceed=block_new`` is over its
     ceiling for the current window (capacity plan, Tier A2)."""

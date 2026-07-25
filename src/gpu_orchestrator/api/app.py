@@ -5,6 +5,10 @@ serializes it). No parallel schemas, no business logic here. The OpenAI proxy is
 serves inference alongside the management API. Auth is a single static bearer token from config
 (multi-tenancy deferred); when no token is set the API is open, so bind to localhost.
 
+The capacity envelope (plan tiers A + B: schedules, concurrency limits, budgets, replicas,
+autoscaling) is here too, so an HTTP client can set a ceiling and not just spend. Interface parity
+with the CLI is the rule: anything the Orchestrator exposes, every interface can reach.
+
 Like the CLI and the proxy, this is an interface: the same core, a different shape.
 """
 
@@ -15,13 +19,23 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
+from ..core.budgets import BudgetStatus
 from ..core.orchestrator import Orchestrator
-from ..errors import DeploymentNotFoundError, ModelNotFoundError, OrchestratorError
+from ..errors import (
+    DeploymentNotFoundError,
+    ModelNotFoundError,
+    OrchestratorError,
+    PolicyNotFoundError,
+)
 from ..models import (
+    AutoscalePolicy,
+    Budget,
+    BudgetAction,
+    BudgetWindow,
     CostEstimate,
     CostRecord,
     Deployment,
@@ -31,6 +45,7 @@ from ..models import (
     ModelSpec,
     ProviderInfo,
     RuntimeOverrides,
+    Schedule,
     UsageSummary,
     VolumeInfo,
 )
@@ -55,6 +70,42 @@ class EstimateRequest(BaseModel):
     model_id: str
     provider: str = "runpod"
     hours: float = 1.0
+
+
+class LimitsRequest(BaseModel):
+    """Body for `PUT /deployments/{id}/limits` (Tier A3). The domain model validates the values, so
+    this carries them without re-stating the constraints."""
+
+    max_concurrency: int
+    max_queue: int = 0
+    queue_timeout_s: float = 30.0
+
+
+class ScaleRequest(BaseModel):
+    """Body for `POST /scale` (Tier B1). Replicas are per model, not per deployment: the proxy
+    load-balances every READY deployment of a model."""
+
+    model_id: str
+    replicas: int
+    wait: bool = False
+
+
+class BudgetRequest(BaseModel):
+    """Body for `POST /budgets` (Tier A2). ``deployment_id`` None is account-wide."""
+
+    limit_usd: float
+    window: BudgetWindow = BudgetWindow.MONTHLY
+    on_exceed: BudgetAction = BudgetAction.WARN
+    deployment_id: str | None = None
+    warn_fraction: float = 0.8
+
+
+class AutoscaleRequest(BaseModel):
+    """Body for `PUT /autoscale/{model_id}` (Tier B2)."""
+
+    max_replicas: int
+    target_rpm_per_replica: float
+    min_replicas: int = 1
 
 
 def create_app(
@@ -128,6 +179,72 @@ def create_app(
     def events(deployment_id: str) -> list[Event]:
         return orchestrator.events(deployment_id)
 
+    # --- capacity envelope (plan tiers A + B) -----------------------------------------
+    # Schedules and limits are properties of one deployment, so they are sub-resources of it.
+    # Budgets, autoscaling, and scale are account- or model-scoped, so they are their own resources.
+
+    @app.put("/deployments/{deployment_id}/schedule")
+    async def set_schedule(deployment_id: str, body: Schedule) -> Deployment:
+        return await orchestrator.set_schedule(deployment_id, body)
+
+    @app.delete("/deployments/{deployment_id}/schedule")
+    async def clear_schedule(deployment_id: str) -> Deployment:
+        return await orchestrator.clear_schedule(deployment_id)
+
+    @app.put("/deployments/{deployment_id}/limits")
+    async def set_limits(deployment_id: str, body: LimitsRequest) -> Deployment:
+        return await orchestrator.set_limits(
+            deployment_id,
+            max_concurrency=body.max_concurrency,
+            max_queue=body.max_queue,
+            queue_timeout_s=body.queue_timeout_s,
+        )
+
+    @app.delete("/deployments/{deployment_id}/limits")
+    async def clear_limits(deployment_id: str) -> Deployment:
+        return await orchestrator.set_limits(deployment_id, max_concurrency=None)
+
+    @app.post("/scale")
+    async def scale(body: ScaleRequest) -> list[Deployment]:
+        return await orchestrator.scale(body.model_id, body.replicas, wait=body.wait)
+
+    @app.get("/budgets")
+    def budgets() -> list[BudgetStatus]:
+        return orchestrator.budget_status()
+
+    @app.post("/budgets")
+    async def create_budget(body: BudgetRequest) -> Budget:
+        return await orchestrator.set_budget(
+            limit_usd=body.limit_usd,
+            window=body.window,
+            on_exceed=body.on_exceed,
+            deployment_id=body.deployment_id,
+            warn_fraction=body.warn_fraction,
+        )
+
+    @app.delete("/budgets/{budget_id}", status_code=204)
+    async def delete_budget(budget_id: str) -> None:
+        if not await orchestrator.remove_budget(budget_id):
+            raise PolicyNotFoundError(f"no budget with id {budget_id!r}")
+
+    @app.get("/autoscale")
+    def autoscale() -> list[AutoscalePolicy]:
+        return orchestrator.list_autoscale()
+
+    @app.put("/autoscale/{model_id}")
+    async def set_autoscale(model_id: str, body: AutoscaleRequest) -> AutoscalePolicy:
+        return await orchestrator.set_autoscale(
+            model_id=model_id,
+            max_replicas=body.max_replicas,
+            target_rpm_per_replica=body.target_rpm_per_replica,
+            min_replicas=body.min_replicas,
+        )
+
+    @app.delete("/autoscale/{model_id}", status_code=204)
+    async def delete_autoscale(model_id: str) -> None:
+        if not await orchestrator.remove_autoscale(model_id):
+            raise PolicyNotFoundError(f"no autoscaling policy for {model_id!r}")
+
     @app.get("/models")
     def models() -> list[ModelSpec]:
         return orchestrator.list_models()
@@ -153,6 +270,10 @@ def create_app(
     @app.get("/volumes")
     async def volumes() -> list[VolumeInfo]:
         return await orchestrator.list_volumes()
+
+    @app.delete("/volumes/{volume_id}", status_code=204)
+    async def delete_volume(volume_id: str) -> None:
+        await orchestrator.delete_volume(volume_id)
 
     @app.post("/estimate")
     async def estimate(body: EstimateRequest) -> CostEstimate:
@@ -190,6 +311,9 @@ _API_PREFIXES = (
     "/usage",
     "/volumes",
     "/estimate",
+    "/scale",
+    "/budgets",
+    "/autoscale",
     "/v1",
 )
 
@@ -233,5 +357,13 @@ def _install_cors(app: FastAPI, origins: list[str]) -> None:
 def _install_error_handling(app: FastAPI) -> None:
     @app.exception_handler(OrchestratorError)
     async def _handle(request: Request, exc: OrchestratorError) -> JSONResponse:
-        status = 404 if isinstance(exc, DeploymentNotFoundError | ModelNotFoundError) else 400
+        not_found = DeploymentNotFoundError | ModelNotFoundError | PolicyNotFoundError
+        status = 404 if isinstance(exc, not_found) else 400
         return JSONResponse({"error": str(exc)}, status_code=status)
+
+    @app.exception_handler(ValidationError)
+    async def _handle_validation(request: Request, exc: ValidationError) -> JSONResponse:
+        # A domain model rejected a value the request DTO could not judge (a concurrency cap below
+        # 1, a non-positive budget limit). The constraint lives on the §6 model, so it surfaces here
+        # rather than being re-stated as a parallel schema on the DTO.
+        return JSONResponse({"error": str(exc.errors()[0]["msg"])}, status_code=400)

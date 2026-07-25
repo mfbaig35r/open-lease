@@ -54,7 +54,26 @@ All notable changes to open-lease are documented here. The format follows
   them); `gpu autoscale list` / `rm` manage policies. The signal is served rate, so it tracks
   sustained load; a schedule-managed model is left to its schedule.
 
+- Interface parity for the capacity envelope. Tiers A and B landed on the CLI first, which left the
+  REST API and the MCP server able to spend but not to cap, the worst possible asymmetry for an agent
+  driving GPUs. Both now reach the whole surface. REST: `PUT`/`DELETE /deployments/{id}/schedule`,
+  `PUT`/`DELETE /deployments/{id}/limits`, `POST /scale`, `GET`/`POST /budgets` +
+  `DELETE /budgets/{id}`, `GET /autoscale` + `PUT`/`DELETE /autoscale/{model_id}`, and
+  `DELETE /volumes/{id}`. MCP: `set_schedule`/`clear_schedule`, `set_limits`/`clear_limits`,
+  `scale_model`, `set_budget`/`list_budgets`/`remove_budget`,
+  `set_autoscale`/`list_autoscale`/`remove_autoscale`, plus `deployment_events` and `list_volumes`.
+  The MCP `set_schedule` tool takes the same human window spec as the CLI (`"mon-fri 06:00-18:00"`).
+  `run_batch` stays CLI-only until it has a job resource to poll, and `delete_volume` stays off MCP.
+- REST API: a domain validator rejection (a concurrency cap below 1, a budget limit of 0) now returns
+  400 with the validator's message instead of a 500, and an unknown budget or autoscale policy id
+  returns 404 (new `PolicyNotFoundError`).
+
 ### Changed
+- The schedule window-spec parser moved from `cli/main.py` to `core/schedule.py` (`build_schedule`),
+  so the CLI and the MCP tool share one parser instead of each interface growing its own. Behavior is
+  unchanged apart from the malformed-default message, which no longer names a CLI flag.
+- `core.budgets.BudgetStatus` is a Pydantic model rather than a dataclass, so the REST API and MCP can
+  return a budget's spend snapshot without a parallel schema. Attribute access is unchanged.
 - Bumped the default ad-hoc deploy image from `vllm/vllm-openai:v0.9.1` (mid-2025) to `v0.25.1`. The
   old pin silently fails to load newer model architectures (a Dec-2025 model crash-looped until
   redeployed with a current image). Still a deliberate pin, not `latest`; override per deploy with

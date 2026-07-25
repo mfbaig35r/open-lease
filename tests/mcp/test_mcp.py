@@ -68,3 +68,137 @@ async def test_estimate_cost(server):
             "estimate_cost", {"model_id": "qwen3-0.6b", "provider": "mock"}
         )
         assert result.data["gpu_hourly_usd"] == 0.17
+
+
+# --- capacity envelope (plan tiers A + B): an agent that can deploy can also cap -------
+
+
+async def _deploy(client) -> str:
+    dep = await client.call_tool(
+        "deploy_model", {"model_id": "qwen3-0.6b", "provider": "mock", "wait": True}
+    )
+    return dep.data["id"]
+
+
+async def test_capacity_tools_are_exposed(server):
+    """Parity guard: the tools that make capacity bounded must exist, or an agent can spend without
+    being able to set a ceiling."""
+    async with Client(server) as client:
+        names = {t.name for t in await client.list_tools()}
+    assert {
+        "scale_model",
+        "set_schedule",
+        "clear_schedule",
+        "set_limits",
+        "clear_limits",
+        "set_budget",
+        "list_budgets",
+        "remove_budget",
+        "set_autoscale",
+        "list_autoscale",
+        "remove_autoscale",
+        "deployment_events",
+    } <= names
+
+
+async def test_schedule_from_window_spec(server):
+    async with Client(server) as client:
+        dep_id = await _deploy(client)
+        result = await client.call_tool(
+            "set_schedule",
+            {
+                "deployment_id": dep_id,
+                "on": ["mon-fri 06:00-18:00"],
+                "timezone": "America/New_York",
+            },
+        )
+        schedule = result.data["schedule"]
+        assert schedule["timezone"] == "America/New_York"
+        assert schedule["rules"][0]["days"] == [0, 1, 2, 3, 4]  # mon-fri
+        assert schedule["rules"][0]["posture"] == "on"
+        assert schedule["default_posture"] == "off"  # nothing else runs
+
+        cleared = await client.call_tool("clear_schedule", {"deployment_id": dep_id})
+        assert cleared.data["schedule"] is None
+
+
+async def test_schedule_rejects_a_malformed_window(server):
+    async with Client(server) as client:
+        dep_id = await _deploy(client)
+        with pytest.raises(Exception, match="HH:MM"):
+            await client.call_tool(
+                "set_schedule", {"deployment_id": dep_id, "on": ["mon-fri mornings"]}
+            )
+
+
+async def test_limits_set_and_clear(server):
+    async with Client(server) as client:
+        dep_id = await _deploy(client)
+        limited = await client.call_tool(
+            "set_limits", {"deployment_id": dep_id, "max_concurrency": 8, "max_queue": 32}
+        )
+        assert limited.data["max_concurrency"] == 8
+        assert limited.data["max_queue"] == 32
+        cleared = await client.call_tool("clear_limits", {"deployment_id": dep_id})
+        assert cleared.data["max_concurrency"] is None
+
+
+async def test_scale_model(server):
+    async with Client(server) as client:
+        await _deploy(client)
+        scaled = await client.call_tool(
+            "scale_model", {"model_id": "qwen3-0.6b", "replicas": 2, "wait": True}
+        )
+        assert len(scaled.data) == 2
+        listed = await client.call_tool("list_deployments", {})
+        assert len(listed.data) == 2
+
+
+async def test_budget_lifecycle(server):
+    async with Client(server) as client:
+        created = await client.call_tool(
+            "set_budget", {"limit_usd": 250, "window": "daily", "on_exceed": "stop"}
+        )
+        budget_id = created.data["id"]
+        assert created.data["on_exceed"] == "stop"
+
+        listed = await client.call_tool("list_budgets", {})
+        assert listed.data[0]["budget"]["id"] == budget_id
+        assert listed.data[0]["spent_usd"] == 0.0  # nothing accrued yet
+
+        removed = await client.call_tool("remove_budget", {"budget_id": budget_id})
+        assert removed.data["removed"] == budget_id
+        missing = await client.call_tool("remove_budget", {"budget_id": budget_id})
+        assert "error" in missing.data
+
+
+async def test_autoscale_lifecycle(server):
+    async with Client(server) as client:
+        policy = await client.call_tool(
+            "set_autoscale",
+            {"model_id": "qwen3-0.6b", "max_replicas": 4, "target_rpm_per_replica": 30},
+        )
+        assert policy.data["max_replicas"] == 4
+        assert policy.data["min_replicas"] == 1
+        listed = await client.call_tool("list_autoscale", {})
+        assert listed.data[0]["model_id"] == "qwen3-0.6b"
+
+        removed = await client.call_tool("remove_autoscale", {"model_id": "qwen3-0.6b"})
+        assert removed.data["removed"] == "qwen3-0.6b"
+        missing = await client.call_tool("remove_autoscale", {"model_id": "qwen3-0.6b"})
+        assert "error" in missing.data
+
+
+async def test_list_volumes(server):
+    async with Client(server) as client:
+        result = await client.call_tool("list_volumes", {})
+        assert result.data == []  # no cache volume created in this run
+
+
+async def test_deployment_events(server):
+    async with Client(server) as client:
+        dep_id = await _deploy(client)
+        events = await client.call_tool("deployment_events", {"deployment_id": dep_id})
+        kinds = [e["kind"] for e in events.data]
+        assert "deployment_requested" in kinds
+        assert "deployment_ready" in kinds

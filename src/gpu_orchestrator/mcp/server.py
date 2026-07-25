@@ -3,6 +3,15 @@ method. Same core as the CLI and REST API; the shape here is tools for an agent.
 
 Tools return JSON-serializable dicts (the §6 models via ``model_dump``). Destructive tools require
 an explicit ``confirm`` argument. ``chat_completion`` reuses the proxy's model-name routing.
+
+The capacity-envelope tools (plan tiers A + B) matter most here: an agent that can deploy GPUs but
+cannot cap them is the dangerous shape. Schedules, concurrency limits, budgets, replicas, and
+autoscaling are all reachable, and the schedule tool takes the same human window spec as the CLI
+(``"mon-fri 06:00-18:00"``) via the shared parser in ``core.schedule``.
+
+Two Orchestrator methods are deliberately not tools (tracked, not silently missing): ``run_batch``,
+because a fan-out over thousands of prompts outlives a tool call and wants a job resource to poll,
+and ``delete_volume``, because a shared model cache is not an agent's to destroy (the CLI keeps it).
 """
 
 from __future__ import annotations
@@ -11,6 +20,8 @@ import httpx
 from fastmcp import FastMCP
 
 from ..core.orchestrator import Orchestrator
+from ..core.schedule import build_schedule
+from ..models import BudgetAction, BudgetWindow
 from ..proxy.openai_proxy import _route_table
 
 
@@ -59,6 +70,126 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
         return {"deleted": deployment_id}
 
     @mcp.tool
+    async def scale_model(model_id: str, replicas: int, wait: bool = False) -> list[dict]:
+        """Set how many load-balanced replicas serve a model (Tier B1). The proxy round-robins over
+        every READY deployment of the model, so capacity adds up. Scaling up clones an existing
+        deployment (needs at least one active member); scaling down stops the newest surplus."""
+        deps = await orchestrator.scale(model_id, replicas, wait=wait)
+        return [d.model_dump(mode="json") for d in deps]
+
+    @mcp.tool
+    async def set_schedule(
+        deployment_id: str,
+        on: list[str] | None = None,
+        off: list[str] | None = None,
+        timezone: str = "UTC",
+        default: str = "off",
+    ) -> dict:
+        """Make a deployment's capacity follow an operating schedule (Tier A1), so spend stops
+        outside its windows instead of running until someone stops it. Each window is
+        "<days> HH:MM-HH:MM", e.g. on=["mon-fri 06:00-18:00"]; days are mon..sun, a range
+        (mon-fri), a list (mon,wed,fri), or "all". ``timezone`` is an IANA name
+        (America/New_York) and windows are wall-clock in it. ``default`` is the posture when no
+        window matches (on|off). Needs a running daemon to take effect."""
+        schedule = build_schedule(on or [], off or [], timezone=timezone, default=default)
+        dep = await orchestrator.set_schedule(deployment_id, schedule)
+        return dep.model_dump(mode="json")
+
+    @mcp.tool
+    async def clear_schedule(deployment_id: str) -> dict:
+        """Remove a deployment's schedule, returning it to manual start/stop control."""
+        return (await orchestrator.clear_schedule(deployment_id)).model_dump(mode="json")
+
+    @mcp.tool
+    async def set_limits(
+        deployment_id: str,
+        max_concurrency: int,
+        max_queue: int = 0,
+        queue_timeout_s: float = 30.0,
+    ) -> dict:
+        """Cap in-flight requests to a deployment (Tier A3), enforced by the OpenAI proxy. It admits
+        up to ``max_concurrency`` at once; up to ``max_queue`` more wait ``queue_timeout_s`` seconds
+        for a slot, and anything beyond gets a 429. A running proxy picks the change up on its next
+        restart."""
+        dep = await orchestrator.set_limits(
+            deployment_id,
+            max_concurrency=max_concurrency,
+            max_queue=max_queue,
+            queue_timeout_s=queue_timeout_s,
+        )
+        return dep.model_dump(mode="json")
+
+    @mcp.tool
+    async def clear_limits(deployment_id: str) -> dict:
+        """Remove a deployment's concurrency limit (unlimited)."""
+        dep = await orchestrator.set_limits(deployment_id, max_concurrency=None)
+        return dep.model_dump(mode="json")
+
+    @mcp.tool
+    async def set_budget(
+        limit_usd: float,
+        window: str = "monthly",
+        on_exceed: str = "warn",
+        deployment_id: str | None = None,
+        warn_fraction: float = 0.8,
+    ) -> dict:
+        """Set a spend ceiling (Tier A2). ``window`` is daily or monthly; ``deployment_id`` None is
+        account-wide. ``on_exceed``: warn (event only), stop (tear down the in-scope deployments for
+        the rest of the window), or block_new (refuse new deploys while over). A hard ceiling needs
+        the daemon running to enforce it."""
+        budget = await orchestrator.set_budget(
+            limit_usd=limit_usd,
+            window=BudgetWindow(window),
+            on_exceed=BudgetAction(on_exceed),
+            deployment_id=deployment_id,
+            warn_fraction=warn_fraction,
+        )
+        return budget.model_dump(mode="json")
+
+    @mcp.tool
+    def list_budgets() -> list[dict]:
+        """Every budget with how much it has spent so far this window (and whether it is over)."""
+        return [s.model_dump(mode="json") for s in orchestrator.budget_status()]
+
+    @mcp.tool
+    async def remove_budget(budget_id: str) -> dict:
+        """Delete a budget by id. Any teardown hold it set clears on the daemon's next tick."""
+        if not await orchestrator.remove_budget(budget_id):
+            return {"error": f"no budget with id {budget_id!r}"}
+        return {"removed": budget_id}
+
+    @mcp.tool
+    async def set_autoscale(
+        model_id: str,
+        max_replicas: int,
+        target_rpm_per_replica: float,
+        min_replicas: int = 1,
+    ) -> dict:
+        """Keep a model's replica count matched to its served request rate (Tier B2), between
+        ``min_replicas`` and ``max_replicas``, at about ``target_rpm_per_replica`` requests per
+        minute each. Rejected demand (a 429) is not part of the signal, so set the target below a
+        replica's ceiling. Needs the daemon running."""
+        policy = await orchestrator.set_autoscale(
+            model_id=model_id,
+            max_replicas=max_replicas,
+            target_rpm_per_replica=target_rpm_per_replica,
+            min_replicas=min_replicas,
+        )
+        return policy.model_dump(mode="json")
+
+    @mcp.tool
+    def list_autoscale() -> list[dict]:
+        """Autoscaling policies by model."""
+        return [p.model_dump(mode="json") for p in orchestrator.list_autoscale()]
+
+    @mcp.tool
+    async def remove_autoscale(model_id: str) -> dict:
+        """Delete a model's autoscaling policy (its replica count stays where it is)."""
+        if not await orchestrator.remove_autoscale(model_id):
+            return {"error": f"no autoscaling policy for {model_id!r}"}
+        return {"removed": model_id}
+
+    @mcp.tool
     def list_models() -> list[dict]:
         """List the model catalog (ids, GPU needs, capabilities)."""
         return [m.model_dump(mode="json") for m in orchestrator.list_models()]
@@ -87,6 +218,13 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
         return (await orchestrator.get_health(deployment_id)).model_dump(mode="json")
 
     @mcp.tool
+    def deployment_events(deployment_id: str | None = None) -> list[dict]:
+        """The event log for a deployment (or all deployments when omitted): every lifecycle step,
+        reconcile action, budget decision, and failure, in order. The first place to look when a
+        deployment did not do what was asked."""
+        return [e.model_dump(mode="json") for e in orchestrator.events(deployment_id)]
+
+    @mcp.tool
     async def provider_status() -> list[dict]:
         """Configured providers and their capabilities (GPU menu, regions)."""
         return [p.model_dump(mode="json") for p in await orchestrator.list_providers()]
@@ -96,6 +234,11 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
         """Per-data-center GPU availability, optionally for a specific model's GPU."""
         rows = await orchestrator.gpu_availability(model_id=model_id)
         return [r.model_dump(mode="json") for r in rows]
+
+    @mcp.tool
+    async def list_volumes() -> list[dict]:
+        """Persistent model-cache network volumes (a warm cache cuts cold-start download time)."""
+        return [v.model_dump(mode="json") for v in await orchestrator.list_volumes()]
 
     @mcp.tool
     async def estimate_cost(model_id: str, provider: str = "runpod", hours: float = 1.0) -> dict:

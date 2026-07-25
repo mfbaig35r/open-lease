@@ -9,8 +9,9 @@ orchestrator calls ``admission_blocked`` before a new deploy.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
+
+from pydantic import BaseModel
 
 from ..models import Budget, BudgetAction, BudgetWindow, CostRecord
 
@@ -36,9 +37,9 @@ def window_spend(records: list[CostRecord], start: datetime, now: datetime) -> f
     return round(total, 4)
 
 
-@dataclass
-class BudgetStatus:
-    """The state of one budget at a point in time (a pure snapshot for events and enforcement)."""
+class BudgetStatus(BaseModel):
+    """The state of one budget at a point in time (a pure snapshot for events and enforcement). A
+    model, not a dataclass, so the REST API and MCP tools can return it as-is."""
 
     budget: Budget
     spent_usd: float
