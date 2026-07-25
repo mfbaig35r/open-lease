@@ -59,6 +59,31 @@ The full, non-negotiable list is in [CLAUDE.md](CLAUDE.md). The ones that matter
 - **Model**: add an entry to `catalog/models.toml`. Set `validated_at` only after a real deploy has
   reached READY and served a completion; leave it empty otherwise so the catalog stays honest.
 
+## Cutting a release
+
+Publishing is tag-push, not a GitHub Release: a `v*` tag runs `.github/workflows/publish.yml`, which
+builds the sdist and wheel and publishes to PyPI via Trusted Publishing. A version can never be
+re-uploaded, so the order matters.
+
+The released wheel bundles the visual workbench, built in CI from the ref in the
+`OPEN_LEASE_UI_REF` repository variable. That variable is **pinned to an open-lease-ui tag** so a
+backend tag reproduces exactly one wheel. It does not update itself, so bumping it is part of the
+ritual: skip it and the release silently ships the previous workbench.
+
+1. Land and push the workbench work in [open-lease-ui](https://github.com/mfbaig35r/open-lease-ui),
+   then tag it (`git tag -a v0.5.0 -m "..." && git push origin v0.5.0`). The UI is versioned in
+   lockstep with open-lease, since it ships only inside this wheel.
+2. Point the pin at that tag: `gh variable set OPEN_LEASE_UI_REF --body v0.5.0`.
+3. Here: bump `version` in `pyproject.toml`, close the `[Unreleased]` CHANGELOG section as the new
+   version with its date, and add its compare link at the bottom.
+4. Verify locally before tagging anything: `uv run ruff check src/ tests/`,
+   `uv run ruff format --check src/ tests/`, `uv run python -m pytest tests/ -q`, then `uv build` and
+   install the wheel into a scratch venv to confirm it reports the new version and ships
+   `gpu_orchestrator/web/index.html`.
+5. Commit, then `git tag -a v0.5.0 -m "..." && git push origin main v0.5.0`.
+6. Watch the run. Its summary records the UI ref and commit that went into the wheel, so check that
+   it is the tag you meant. Then install from PyPI into a scratch venv as a final check.
+
 ## Pull requests
 
 Branch off `main`, keep tests and both ruff checks green, and open a PR. Small, focused PRs review

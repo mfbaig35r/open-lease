@@ -14,14 +14,39 @@ jobs:
 
       # Build the visual workbench (open-lease-ui) and bundle it into the package so the released
       # wheel serves `gpu ui` out of the box. gpu_orchestrator/web is gitignored (a build output),
-      # so it must be produced here. open-lease-ui is a public repo, so a plain checkout works. The
-      # UI ref defaults to main; override with an OPEN_LEASE_UI_REF repository variable to pin a tag.
+      # so it must be produced here. open-lease-ui is a public repo, so a plain checkout works.
+      #
+      # The UI ref comes from the OPEN_LEASE_UI_REF repository variable, pinned to a UI tag so a
+      # backend tag reproduces one exact wheel. Bump it as part of cutting a release (see
+      # CONTRIBUTING.md). Unset falls back to open-lease-ui main, which still builds but makes the
+      # release depend on whatever that branch happened to be, so it warns.
+      - name: Resolve the UI ref
+        id: ui
+        run: |
+          ref='${{ vars.OPEN_LEASE_UI_REF }}'
+          if [ -z "$ref" ]; then
+            echo "::warning title=UI ref not pinned::OPEN_LEASE_UI_REF is unset, so the workbench is being built from open-lease-ui main. This release is not reproducible from its tag alone. Set the variable to a UI tag."
+            ref=main
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Check out open-lease-ui
         uses: actions/checkout@v4
         with:
           repository: mfbaig35r/open-lease-ui
-          ref: ${{ vars.OPEN_LEASE_UI_REF || 'main' }}
+          ref: ${{ steps.ui.outputs.ref }}
           path: ui-src
+
+      # Record which UI actually went into this wheel, on the run page. Without this, "which
+      # workbench shipped in 0.4.0" is only answerable by digging through checkout logs.
+      - name: Record the bundled UI commit
+        working-directory: ui-src
+        run: |
+          {
+            echo "### Bundled workbench"
+            echo "- open-lease-ui ref: \`${{ steps.ui.outputs.ref }}\`"
+            echo "- commit: \`$(git rev-parse HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: pnpm/action-setup@v4
         with:
           version: 10 # open-lease-ui uses pnpm 10 conventions (settings in pnpm-workspace.yaml)
