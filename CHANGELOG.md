@@ -6,6 +6,8 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-25
+
 Release tooling only. Nothing in the installed package changed, so upgrading from 0.4.0 gains
 nothing at runtime: the work is in how releases are cut and in what a release tag guarantees about
 the workbench it bundles.
@@ -166,7 +168,8 @@ Initial public release: the orchestration core plus three interfaces over it.
 - Background daemon (reconcile / health / orphan sweep / cost snapshot / event retention),
   per-deployment cost tracking, and download-progress reporting during bring-up.
 
-[Unreleased]: https://github.com/mfbaig35r/open-lease/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mfbaig35r/open-lease/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mfbaig35r/open-lease/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mfbaig35r/open-lease/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mfbaig35r/open-lease/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mfbaig35r/open-lease/compare/v0.1.0...v0.2.0
