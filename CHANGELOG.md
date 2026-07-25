@@ -6,6 +6,8 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-25
+
 No runtime changes, and none in the workbench either. The engine, CLI, REST API, MCP server, proxy,
 and the bundled workbench are identical to 0.5.0. This release exists so the two copies of the
 workbench, the one bundled in the wheel and the one hosted at
@@ -183,7 +185,8 @@ Initial public release: the orchestration core plus three interfaces over it.
 - Background daemon (reconcile / health / orphan sweep / cost snapshot / event retention),
   per-deployment cost tracking, and download-progress reporting during bring-up.
 
-[Unreleased]: https://github.com/mfbaig35r/open-lease/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mfbaig35r/open-lease/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/mfbaig35r/open-lease/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mfbaig35r/open-lease/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mfbaig35r/open-lease/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mfbaig35r/open-lease/compare/v0.2.0...v0.3.0
