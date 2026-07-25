@@ -68,8 +68,8 @@ def test_map_running_unhealthy_is_degraded():
 # --- next_step: happy path toward READY -----------------------------------------------
 
 
-def _dep(desired: S, current: S, failure: FailureInfo | None = None):
-    d = make_deployment(S.READY)
+def _dep(desired: S, current: S, failure: FailureInfo | None = None, *, with_instance: bool = True):
+    d = make_deployment(S.READY, with_instance=with_instance)
     d.desired_state = desired
     d.observed_state = current
     d.failure = failure
@@ -87,7 +87,16 @@ def _dep(desired: S, current: S, failure: FailureInfo | None = None):
     ],
 )
 def test_next_step_progress_toward_ready(observed, expected):
-    assert next_step(_dep(S.READY, S.REQUESTED), observed) == expected
+    # No pod held: nothing to clean up on the way to READY.
+    assert next_step(_dep(S.READY, S.REQUESTED, with_instance=False), observed) == expected
+
+
+def test_next_step_destroys_a_dead_but_present_pod_before_recreating():
+    """Observed REQUESTED while we still hold a pod record means the pod is dead-but-present (an
+    in-place exit). Destroy it first: recreating on top would leave it on the provider with its cost
+    record open. Reachable only that way, since a pod that is truly gone clears the record first."""
+    held = _dep(S.READY, S.READY, with_instance=True)
+    assert next_step(held, S.REQUESTED) == A.DESTROY_INSTANCE
 
 
 def test_next_step_marks_ready_once():

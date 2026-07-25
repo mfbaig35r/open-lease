@@ -296,6 +296,55 @@ async def test_budget_hold_releases_when_no_longer_over(tmp_path):
     assert any(e.kind is EventKind.BUDGET_RELEASED for e in events.query())
 
 
+async def test_budget_hold_release_gives_the_capacity_back(tmp_path):
+    """A daily ceiling is a window, not a delete: once spend is back under it, the deployment the
+    hold forced down comes back up. Releasing the flag while leaving desired_state STOPPED left
+    capacity down permanently, which is not what a window means (or what the docs promise)."""
+    daemon, store, events = _daemon(tmp_path, MockProvider(namespace="test"))
+    _seed(store, state=S.READY, endpoint="https://x")
+    _open_cost(store)  # ~$14 accrued this window
+    store.save_budget(
+        Budget(id="bud-1", window=BudgetWindow.DAILY, limit_usd=5.0, on_exceed="stop")
+    )
+    await daemon.tick_budget(now=_IN_WINDOW)
+    held = store.get_deployment("dep-d1")
+    assert held.budget_hold is True and held.desired_state is S.STOPPED
+
+    # Raising the ceiling puts spend back under it, which is the same shape as a window rollover.
+    store.save_budget(
+        Budget(id="bud-1", window=BudgetWindow.DAILY, limit_usd=500.0, on_exceed="stop")
+    )
+    await daemon.tick_budget(now=_IN_WINDOW)
+
+    released = store.get_deployment("dep-d1")
+    assert released.budget_hold is False
+    assert released.desired_state is S.READY, "the reconciler must be free to bring it back up"
+    assert any(e.kind is EventKind.BUDGET_RELEASED for e in events.query())
+
+
+async def test_budget_hold_does_not_resurrect_a_deployment_the_user_stopped(tmp_path):
+    """The flip side of giving capacity back: a deployment already stopped when the ceiling hit is
+    never marked held, so releasing cannot start it. Otherwise a budget window would silently undo a
+    `gpu stop`."""
+    daemon, store, _ = _daemon(tmp_path, MockProvider(namespace="test"))
+    _seed(store, state=S.STOPPED, desired=S.STOPPED)
+    _open_cost(store)
+    store.save_budget(
+        Budget(id="bud-1", window=BudgetWindow.DAILY, limit_usd=5.0, on_exceed="stop")
+    )
+
+    await daemon.tick_budget(now=_IN_WINDOW)  # over the ceiling
+    assert store.get_deployment("dep-d1").budget_hold is False  # nothing to force
+
+    store.save_budget(
+        Budget(id="bud-1", window=BudgetWindow.DAILY, limit_usd=500.0, on_exceed="stop")
+    )
+    await daemon.tick_budget(now=_IN_WINDOW)  # back under
+
+    still_stopped = store.get_deployment("dep-d1")
+    assert still_stopped.desired_state is S.STOPPED
+
+
 def _autoscale_daemon(tmp_path, **cfg):
     return _daemon(
         tmp_path,
@@ -396,3 +445,54 @@ async def test_autoscale_skips_scheduled_models(tmp_path):
         if d.model_id == "qwen3-0.6b" and d.desired_state is not S.STOPPED
     ]
     assert len(members) == 1  # a schedule owns this model's lifecycle; autoscale leaves it alone
+
+
+async def test_autoscale_does_not_spend_through_a_budget_hold(tmp_path):
+    """A budget stop holds a deployment by forcing desired_state STOPPED, which drops it out of the
+    autoscaler's member count. The autoscaler then read the pool as short of its floor and cloned a
+    replacement with no hold, so a per-deployment ceiling was spent straight through. A budget stop
+    outranks the autoscaler, exactly as it outranks a schedule."""
+    daemon, store, _ = _autoscale_daemon(tmp_path, autoscale_hysteresis_ticks=1)
+    for i in range(2):  # a two-replica pool, matching the policy floor below
+        store.save_deployment(
+            Deployment(
+                id=f"dep-r{i}",
+                model_id="qwen3-0.6b",
+                provider="mock",
+                desired_state=S.READY,
+                observed_state=S.READY,
+                profile=_PROFILE,
+                endpoint_url="https://x",
+                created_at=datetime(2026, 7, 6, 10 + i, 0, tzinfo=UTC),
+            )
+        )
+    store.save_autoscale_policy(_policy(minimum=2, maximum=4))
+    # A ceiling scoped to one replica of the pool, already over.
+    store.save_cost_record(
+        CostRecord(
+            deployment_id="dep-r0",
+            gpu_hourly_usd=1.0,
+            started_at=datetime(2026, 7, 6, 0, 0, tzinfo=UTC),
+            stopped_at=None,
+        )
+    )
+    store.save_budget(
+        Budget(
+            id="bud-1",
+            deployment_id="dep-r0",
+            window=BudgetWindow.DAILY,
+            limit_usd=5.0,
+            on_exceed="stop",
+        )
+    )
+
+    await daemon.tick_budget(now=_IN_WINDOW)
+    assert store.get_deployment("dep-r0").budget_hold is True
+
+    await daemon.tick_autoscale(now=_IN_WINDOW)
+
+    rows = store.list_deployments(include_stopped=True)
+    everything = [d for d in rows if d.model_id == "qwen3-0.6b"]
+    assert len(everything) == 2, "no replacement replica while a ceiling holds one down"
+    wants_to_run = [d for d in everything if d.desired_state is not S.STOPPED]
+    assert len(wants_to_run) == 1  # only the unheld replica

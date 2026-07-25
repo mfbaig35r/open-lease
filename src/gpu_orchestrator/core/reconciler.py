@@ -139,6 +139,11 @@ def next_step(
 
     # Happy path toward READY.
     if observed == DeploymentState.REQUESTED:
+        # Nothing is serving, but a pod record we still hold means the pod is dead-but-present (an
+        # in-place exit). Destroy it before recreating, or it lingers on the provider while we hold
+        # a new one and its cost record stays open. One step per tick: the create follows next.
+        if deployment.instance is not None:
+            return ReconcileAction.DESTROY_INSTANCE
         return ReconcileAction.CREATE_INSTANCE
     if observed == DeploymentState.PROVISIONING:
         return ReconcileAction.WAIT_FOR_PROVIDER
@@ -199,6 +204,12 @@ async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) 
     download_progress: float | None = None
     if instance is not None:
         endpoint_url = await provider.resolve_endpoint_url(instance, runtime.serving_port)
+        # A pod the provider calls dead is not serving, whatever our record says. This has to be
+        # folded BEFORE the serving-state preservation below: a pod that exits in place (still
+        # listed, desiredStatus EXITED) would otherwise read READY forever, with its cost record
+        # left open and nothing recreating it. No health probe: a dead runtime cannot answer one.
+        if instance.state.upper() in _DEAD:
+            return Observation(DeploymentState.REQUESTED, instance, endpoint_url, None, adopted)
         # Once a deployment is serving (READY/DEGRADED), runtime health is the health engine's job,
         # with flap absorption (§10). observe here only confirms the instance is alive and preserves
         # the current serving state; a single blip must never regress it through this path.

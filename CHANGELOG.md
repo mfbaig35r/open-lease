@@ -6,6 +6,27 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A pod that dies but stays listed by the provider (RunPod returns 200 with `desiredStatus` EXITED,
+  which is what an in-place container exit looks like) is now collapsed and recreated. It used to read
+  READY forever: `observe` preserves the serving state for READY/DEGRADED so a health blip cannot
+  regress it, and that path skipped the dead-token fold, the one place a dead provider state becomes
+  REQUESTED. The deployment kept claiming READY while serving nothing, its cost record stayed open so
+  reported spend climbed for a pod that was not running, nothing recreated it, and the runtime-death
+  counter never moved so the crash-loop cap could not engage either. A dead-but-present pod is now
+  destroyed before the replacement is created, which also closes the cost record. A pod that is gone
+  entirely was already handled correctly.
+- A spend ceiling scoped to one deployment is no longer spent straight through by an autoscaling
+  policy on the same model. A budget stop holds a deployment by forcing `desired_state` STOPPED, which
+  dropped it out of the autoscaler's member count; the autoscaler then read the pool as short of its
+  floor and cloned a replacement carrying no hold. A budget stop now outranks the autoscaler, exactly
+  as it already outranks a schedule. (An account-wide ceiling was unaffected.)
+- A released budget hold gives the capacity back. Clearing the hold left `desired_state` STOPPED, so a
+  deployment stopped by a daily ceiling stayed down permanently instead of returning when the window
+  reset, contradicting both the 0.4.0 notes and the workbench copy. A deployment that was already
+  stopped when the ceiling hit is never marked held, so releasing cannot resurrect something stopped
+  on purpose.
+
 ## [0.5.1] - 2026-07-25
 
 No runtime changes, and none in the workbench either. The engine, CLI, REST API, MCP server, proxy,

@@ -21,6 +21,7 @@ from .base import Provider
 
 _PROVISIONING = "PROVISIONING"
 _RUNNING = "RUNNING"
+_EXITED = "EXITED"  # a dead provider token, for a pod that exits without being terminated
 
 _MOCK_GPU = GPUType(
     id="MOCK-GPU",
@@ -83,8 +84,11 @@ class _Pod:
         self.network_volume_id = network_volume_id  # what cache volume (if any) this pod attached
         self.observations = 0
         self.logs: list[str] = []
+        self.dead = False  # exited in place: still listed, but reporting a dead token
 
     def state(self, steps_to_running: int) -> str:
+        if self.dead:
+            return _EXITED
         return _RUNNING if self.observations >= steps_to_running else _PROVISIONING
 
 
@@ -113,6 +117,14 @@ class MockProvider(Provider):
     def kill(self, provider_instance_id: str) -> None:
         """Simulate an out-of-band death (e.g. someone killing the pod from a console)."""
         self._pods.pop(provider_instance_id, None)
+
+    def exit_in_place(self, provider_instance_id: str) -> None:
+        """Simulate a pod that dies but is still listed, reporting a dead provider token (RunPod
+        returns 200 with desiredStatus EXITED for these). Distinct from ``kill``, where the pod is
+        gone entirely: the two take different paths through ``observe``."""
+        pod = self._pods.get(provider_instance_id)
+        if pod is not None:
+            pod.dead = True
 
     def set_logs(self, provider_instance_id: str, lines: list[str]) -> None:
         pod = self._pods.get(provider_instance_id)

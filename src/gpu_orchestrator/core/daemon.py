@@ -211,11 +211,17 @@ class Daemon:
         for deployment in deployments:
             should_hold = deployment.id in held
             if should_hold and not deployment.budget_hold:
+                if deployment.desired_state is DeploymentState.STOPPED:
+                    continue  # already down for its own reasons: nothing to force, nothing to undo
                 deployment.budget_hold = True
                 deployment.desired_state = DeploymentState.STOPPED
                 self._store.save_deployment(deployment)
             elif not should_hold and deployment.budget_hold:
                 deployment.budget_hold = False
+                # Give the capacity back. The hold is the only reason it is down (a deployment
+                # already stopped when the ceiling hit is never marked held, just above), and a
+                # daily ceiling that stopped a deployment forever is not a window, it is a delete.
+                deployment.desired_state = DeploymentState.READY
                 self._store.save_deployment(deployment)
                 self._emit_dep_event(deployment, EventKind.BUDGET_RELEASED, {})
 
@@ -254,7 +260,16 @@ class Daemon:
         now = now or _utcnow()
         since = now - timedelta(seconds=self._config.autoscale_window_seconds)
         window_minutes = self._config.autoscale_window_seconds / 60.0
+        # A budget stop holds a deployment by forcing desired_state STOPPED, which drops it out of
+        # the member count below. Without this the autoscaler reads the pool as short of its floor
+        # and clones a replacement carrying no hold, so a per-deployment ceiling would be spent
+        # straight through. A budget stop outranks the autoscaler, as it outranks a schedule.
+        held_models = {
+            d.model_id for d in self._store.list_deployments(include_stopped=True) if d.budget_hold
+        }
         for policy in self._store.list_autoscale_policies():
+            if policy.model_id in held_models:
+                continue
             members = sorted(
                 (
                     d

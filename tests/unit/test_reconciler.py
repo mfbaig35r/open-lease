@@ -171,6 +171,35 @@ async def test_reconcile_recreates_after_out_of_band_death(tmp_path):
     assert dep.observed_state == S.PROVISIONING
 
 
+async def test_reconcile_collapses_a_pod_that_exits_in_place(tmp_path):
+    """A pod that dies but stays listed (RunPod returns 200 with desiredStatus EXITED) used to read
+    READY forever: `observe` preserves the serving state for READY/DEGRADED, and that path skipped
+    the dead-token fold. The deployment stayed READY with its cost record open, was never recreated,
+    and the runtime-death counter never moved, so the crash cap could not engage either."""
+    provider = MockProvider(namespace="test")
+    ctx = _ctx(tmp_path, provider)
+    dep = _new_deployment()
+    ctx["store"].save_deployment(dep)
+    dep = await _drive(dep, ctx, until={S.READY, S.FAILED})
+    assert dep.observed_state == S.READY
+    pod_id = dep.instance.provider_instance_id
+
+    provider.exit_in_place(pod_id)  # the container exits; the pod object remains
+
+    # Tick one: the dead pod is torn down, which closes the cost record with it.
+    dep = await reconcile_once(dep, **ctx)
+    assert dep.observed_state != S.READY
+    assert dep.instance is None
+    open_records = [r for r in ctx["store"].get_cost_records(dep.id) if r.stopped_at is None]
+    assert open_records == [], "an exited pod must not keep accruing cost"
+    assert dep.runtime_failures == 1, "an in-place exit is a runtime death, so the cap can engage"
+
+    # Tick two: it comes back, because desired is still READY.
+    dep = await reconcile_once(dep, **ctx)
+    assert dep.instance is not None
+    assert dep.instance.provider_instance_id != pod_id
+
+
 async def test_reconcile_retries_then_fails_on_persistent_create_error(tmp_path):
     ctx = _ctx(tmp_path, MockProvider(namespace="test", fail_create=True))
     dep = _new_deployment()
