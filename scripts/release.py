@@ -40,12 +40,16 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PACKAGE = "open-lease"
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+# Files the version bump touches, so the failure hint and the release commit agree on the set.
+TOUCHED = ("pyproject.toml", "CHANGELOG.md", "uv.lock")
+# Set once the UI repo is resolved, so a failure can name the file to revert there too.
+_UI_REPO: Path | None = None
 
 
 class ReleaseError(Exception):
@@ -173,7 +177,10 @@ def close_changelog(version: str, *, write: bool) -> None:
         raise ReleaseError("could not find the previous version heading in CHANGELOG.md")
     prev = previous.group(1)
 
-    updated = f"{head}{marker}\n## [{version}] - {date.today().isoformat()}\n{rest}"
+    # UTC, not local: the tag, the PyPI upload, and the workflow run are all stamped in UTC, so a
+    # release cut late in the evening should not be dated the day before them.
+    today = datetime.now(tz=UTC).date().isoformat()
+    updated = f"{head}{marker}\n## [{version}] - {today}\n{rest}"
     old_link = f"[Unreleased]: https://github.com/mfbaig35r/{PACKAGE}/compare/v{prev}...HEAD"
     if old_link not in updated:
         raise ReleaseError(
@@ -230,7 +237,10 @@ def verify_build(version: str) -> Path:
     for required in ("gpu_orchestrator/web/index.html", "gpu_orchestrator/data/models.toml"):
         if not any(n.endswith(required) for n in names):
             raise ReleaseError(f"{wheel.name} is missing {required}")
-    run("uvx", "twine", "check", *(str(p) for p in (REPO / "dist").iterdir()))
+    # Only the distributions: uv drops a .gitignore in dist/, and twine errors on anything it cannot
+    # recognise as a distribution.
+    dists = sorted(p for p in (REPO / "dist").glob("*") if p.suffix in {".whl", ".gz"})
+    run("uvx", "twine", "check", *(str(p) for p in dists))
     print(f"  {wheel.name}: builds, bundles the UI, passes twine")
     return wheel
 
@@ -302,7 +312,9 @@ def move_pin(tag: str) -> None:
 
 
 def tag_release(version: str, tag: str, *, tag_exists: bool) -> None:
-    run("git", "add", "pyproject.toml", "CHANGELOG.md")
+    # uv.lock records this package's own version, so `uv build` rewrites it during verification.
+    # Leaving it out ends the release with a dirty tree, which then blocks the next one.
+    run("git", "add", *TOUCHED)
     if run("git", "diff", "--cached", "--name-only", quiet=True):
         run("git", "commit", "-m", f"Release {version}")
     if not tag_exists:
@@ -340,6 +352,9 @@ def main() -> int:
     tag = f"v{version}"
     ui = Path(args.ui_repo).resolve()
     write = not args.dry_run
+
+    global _UI_REPO
+    _UI_REPO = ui
 
     step(f"Preflight for {version}")
     check_tools()
@@ -387,10 +402,12 @@ if __name__ == "__main__":
         sys.exit(main())
     except ReleaseError as exc:
         print(f"\n\033[31mrelease failed:\033[0m {exc}", file=sys.stderr)
-        print(
-            "Local edits (if any) revert with: git checkout -- pyproject.toml CHANGELOG.md",
-            file=sys.stderr,
-        )
+        # Name every file the version bump touches, in both repos. A half-reverted release leaves a
+        # dirty tree that the next attempt refuses to start from.
+        print("\nRevert any local edits with:", file=sys.stderr)
+        print(f"  git checkout -- {' '.join(TOUCHED)}", file=sys.stderr)
+        if _UI_REPO is not None:
+            print(f"  git -C {_UI_REPO} checkout -- package.json", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\ninterrupted; nothing was pushed", file=sys.stderr)

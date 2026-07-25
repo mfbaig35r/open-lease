@@ -8,6 +8,7 @@ the guards that refuse a bad release are worth pinning down here instead of disc
 from __future__ import annotations
 
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -109,6 +110,22 @@ def test_bump_ui_version(tmp_path):
     assert '"version": "0.5.0"' in (ui / "package.json").read_text()
     # Already in lockstep: nothing to commit in the UI repo.
     assert release.bump_ui_version(ui, "0.5.0", write=True) is False
+
+
+def test_changelog_date_is_utc(repo):
+    """The tag, the PyPI upload, and the workflow run are stamped in UTC. A release cut late in the
+    evening local time was getting dated the previous day, out of step with all three."""
+    release.close_changelog("0.5.0", write=True)
+    expected = datetime.now(tz=UTC).date().isoformat()
+    assert f"## [0.5.0] - {expected}" in (repo / "CHANGELOG.md").read_text()
+
+
+def test_touched_files_include_the_lockfile():
+    """uv.lock records this package's own version, so `uv build` rewrites it during verification. It
+    has to be in the release commit, or the release ends dirty and blocks the next one."""
+    assert "uv.lock" in release.TOUCHED
+    assert "pyproject.toml" in release.TOUCHED
+    assert "CHANGELOG.md" in release.TOUCHED
 
 
 @pytest.mark.parametrize("bad", ["0.5", "v0.5.0.1", "1.0.0-rc1", "latest", ""])
