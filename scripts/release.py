@@ -1,24 +1,26 @@
 """Cut an open-lease release in one command, so no step depends on remembering it.
 
-The release has a cross-repo hazard: the published wheel bundles the visual workbench, which the
-publish workflow builds from the ref in the ``OPEN_LEASE_UI_REF`` repository variable. That variable
-does not update itself, so a release cut without moving it ships the *previous* workbench while
-looking fine. Bumping the pin is therefore a step here, not a line in a checklist.
+The release spans two repos: the published wheel bundles the visual workbench, which lives in
+open-lease-ui. The publish workflow derives the workbench ref from the release tag (v0.5.0 here
+builds open-lease-ui at v0.5.0), so the two version in lockstep and nothing needs keeping in step by
+hand. What this script owes that arrangement is the UI tag itself, pushed before the release tag,
+since pushing the release tag is what starts the run that looks for it.
 
 What it does, in order:
 
 1. **Preflight.** Both repos clean, on main, and in sync with origin. The target version is not
    already tagged here, tagged in the UI repo at a different commit, or on PyPI (a PyPI version can
-   never be re-uploaded, so this is the one check worth being pedantic about).
-2. **Local edits.** ``version`` in pyproject.toml, and the CHANGELOG's ``[Unreleased]`` section
-   closed as the new version with today's date plus its compare link.
+   never be re-uploaded, so this is the one check worth being pedantic about). It also reports a
+   leftover ``OPEN_LEASE_UI_REF`` override, which would send a workbench other than this tag's.
+2. **Local edits.** ``version`` in pyproject.toml and in the UI's package.json, and the CHANGELOG's
+   ``[Unreleased]`` section closed as the new version with today's date plus its compare link.
 3. **Verify.** Bundle the workbench, then ruff, the test suite, ``uv build``, ``twine check``, and
    an install of the built wheel into a throwaway venv to confirm it reports the new version and
    carries the bundled UI.
 4. **Confirm.** Everything above is local and revertible. Everything below is not, so it stops here
    and shows exactly what it is about to do to GitHub and PyPI.
-5. **Publish.** Bump + tag the UI repo, move the pin to that tag and read it back, then commit, tag,
-   and push here. The tag push triggers the publish workflow, so the pin is always set first.
+5. **Publish.** Bump, commit, and tag the UI repo, then commit, tag, and push here. The UI tag goes
+   first because the release tag push is what starts the workflow that resolves it.
 
 Usage:
     uv run python scripts/release.py 0.5.0              # verify, then ask before publishing
@@ -296,19 +298,23 @@ def tag_ui(ui: Path, tag: str, version: str, *, needs_commit: bool) -> None:
     run("git", "push", "origin", tag, cwd=ui)
 
 
-def move_pin(tag: str) -> None:
-    """Point OPEN_LEASE_UI_REF at the UI tag, then read it back. The publish workflow reads this
-    when the run starts, so it has to be set before the release tag is pushed."""
-    run("gh", "variable", "set", "OPEN_LEASE_UI_REF", "--body", tag)
+def check_ui_override(tag: str) -> str | None:
+    """The publish workflow derives the workbench ref from the release tag, so there is nothing to
+    set here. What can still go wrong is a leftover OPEN_LEASE_UI_REF override from some one-off
+    release, which would quietly ship a workbench other than the one the tag names. Report it; the
+    confirmation prompt repeats it, because an override is legitimate but never accidental."""
     listed = run("gh", "variable", "list", quiet=True)
     for line in listed.splitlines():
         name, _, remainder = line.partition("\t")
         if name == "OPEN_LEASE_UI_REF":
-            if remainder.split("\t")[0].strip() != tag:
-                raise ReleaseError(f"pin read back as {remainder!r}, expected {tag}")
-            print(f"  OPEN_LEASE_UI_REF = {tag} (read back and confirmed)")
-            return
-    raise ReleaseError("OPEN_LEASE_UI_REF is not set after `gh variable set`")
+            override = remainder.split("\t")[0].strip()
+            warn(
+                f"OPEN_LEASE_UI_REF is set to {override!r}, so the wheel bundles that workbench "
+                f"and not {tag}. Run `gh variable delete OPEN_LEASE_UI_REF` unless you mean it."
+            )
+            return override
+    print(f"  workbench ref derives from the tag: open-lease-ui will be built at {tag}")
+    return None
 
 
 def tag_release(version: str, tag: str, *, tag_exists: bool) -> None:
@@ -326,13 +332,21 @@ def tag_release(version: str, tag: str, *, tag_exists: bool) -> None:
 # --- driver ---------------------------------------------------------------------------
 
 
-def confirm(version: str, tag: str, ui: Path) -> None:
+def confirm(version: str, tag: str, ui: Path, override: str | None) -> None:
+    workbench = (
+        f"  ! the wheel will bundle the workbench at {override!r}, not {tag}, because "
+        "OPEN_LEASE_UI_REF is set\n"
+        if override
+        else ""
+    )
     print(
         f"\n\033[1mReady to publish {PACKAGE} {version}.\033[0m All of the above was local. Next:\n"
         f"  1. commit + push {ui.name} package.json, then tag it {tag} and push the tag\n"
-        f"  2. set OPEN_LEASE_UI_REF to {tag} so the wheel bundles that exact workbench\n"
-        f"  3. commit the version bump here, tag {tag}, and push both\n"
-        f"  4. the tag push publishes {version} to PyPI, which can never be undone\n"
+        f"  2. commit the version bump here, tag {tag}, and push both\n"
+        f"  3. the tag push publishes {version} to PyPI, which can never be undone\n"
+        f"{workbench}"
+        f"\nThe workflow builds the workbench from open-lease-ui at this release's tag, which is\n"
+        f"why the UI tag goes first: the tag push here starts the run that resolves it.\n"
     )
     if input("Type the version to continue: ").strip() != version:
         raise ReleaseError("aborted; nothing was pushed")
@@ -363,6 +377,7 @@ def main() -> int:
     check_repo_ready(REPO, "open-lease")
     release_tag_exists = check_tag_free(REPO, tag, "open-lease")
     ui_tag_exists = check_tag_free(ui, tag, "open-lease-ui", expect_sha=ui_head)
+    override = check_ui_override(tag)
 
     step("Version + changelog")
     bump_pyproject(version, write=write)
@@ -372,19 +387,20 @@ def main() -> int:
     step("Verify")
     bundle_ui(ui)
     if args.dry_run:
-        print("\n\033[1mDry run.\033[0m Nothing was edited, tagged, pinned, or pushed.")
+        print("\n\033[1mDry run.\033[0m Nothing was edited, tagged, or pushed.")
         print("  Re-run without --dry-run to cut the release (the build check needs the bump).")
         return 0
     wheel = verify_build(version)
     verify_wheel_installs(wheel, version)
 
     if not args.yes:
-        confirm(version, tag, ui)
+        confirm(version, tag, ui, override)
 
+    # The UI tag first: the workflow resolves the workbench from open-lease-ui at this tag, and the
+    # release tag push below is what starts the workflow.
     step("Publish")
     if not ui_tag_exists:
         tag_ui(ui, tag, version, needs_commit=ui_needs_commit)
-    move_pin(tag)
     tag_release(version, tag, tag_exists=release_tag_exists)
 
     print(

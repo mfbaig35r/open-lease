@@ -8,19 +8,23 @@ All notable changes to open-lease are documented here. The format follows
 
 ### Added
 - `scripts/release.py` cuts a release in one command, so no step depends on remembering it. It
-  preflights (both repos clean and synced, the version untagged and not already on PyPI, since a PyPI
-  version can never be re-uploaded), bumps the version and closes the CHANGELOG section, bundles the
-  workbench, runs ruff + the suite + `uv build` + `twine check` + a scratch-venv install of the built
-  wheel, then stops for confirmation before anything irreversible. Only then does it tag the UI repo,
-  move `OPEN_LEASE_UI_REF` to that tag, and commit/tag/push here. `--dry-run` verifies and changes
-  nothing; `--yes` skips the prompt.
+  preflights (both repos clean and synced, the version untagged in both and not already on PyPI, since
+  a PyPI version can never be re-uploaded), bumps the version here and in the workbench, closes the
+  CHANGELOG section, bundles the workbench, runs ruff + the suite + `uv build` + `twine check` + a
+  scratch-venv install of the built wheel, then stops for confirmation before anything irreversible.
+  Only then does it tag the workbench repo and commit/tag/push here. `--dry-run` verifies and changes
+  nothing; `--yes` skips the prompt. Its file surgery is covered by tests, since a bug there would
+  surface mid-release with a version already tagged.
 
 ### Changed
-- The bundled workbench is pinned: the publish workflow builds it from the `OPEN_LEASE_UI_REF`
-  repository variable (now an open-lease-ui tag) rather than that repo's `main`, so a backend tag
-  identifies exactly one wheel. The workflow warns when the pin is unset instead of quietly falling
-  back to `main`, and writes the workbench ref and commit it used into the run summary. Moving the pin
-  is a step in `scripts/release.py`, because a pin nobody bumps silently ships a stale UI.
+- A release tag now identifies exactly one wheel. The publish workflow derives the bundled workbench
+  from the release tag (`v0.5.0` builds open-lease-ui at `v0.5.0`) instead of building whatever was on
+  that repo's `main`, so the two version in lockstep and there is nothing to keep in step by hand. A
+  release whose workbench tag is missing fails before it builds anything rather than substituting
+  something else, and the run summary records the workbench ref and commit that went into the wheel.
+  The `OPEN_LEASE_UI_REF` repository variable survives as a deliberate override for a release that
+  needs a workbench other than its own version; it warns when set, and the summary marks the workbench
+  as overridden rather than derived.
 
 ## [0.4.0] - 2026-07-25
 

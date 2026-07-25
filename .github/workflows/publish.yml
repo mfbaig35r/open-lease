@@ -16,19 +16,34 @@ jobs:
       # wheel serves `gpu ui` out of the box. gpu_orchestrator/web is gitignored (a build output),
       # so it must be produced here. open-lease-ui is a public repo, so a plain checkout works.
       #
-      # The UI ref comes from the OPEN_LEASE_UI_REF repository variable, pinned to a UI tag so a
-      # backend tag reproduces one exact wheel. Bump it as part of cutting a release (see
-      # CONTRIBUTING.md). Unset falls back to open-lease-ui main, which still builds but makes the
-      # release depend on whatever that branch happened to be, so it warns.
-      - name: Resolve the UI ref
+      # The workbench ref is DERIVED from this release's tag: v0.5.0 here builds open-lease-ui at
+      # v0.5.0. The two version in lockstep (the workbench ships only inside this wheel), so the tag
+      # already names the workbench, and there is no pin to keep in step or forget. A missing UI tag
+      # fails the release loudly rather than silently substituting something else.
+      #
+      # OPEN_LEASE_UI_REF stays as a deliberate override, for the rare release that needs a different
+      # workbench than its own version (a backend-only fix on an older UI, or a main build to test the
+      # pipeline). It warns when set, because a forgotten override is exactly the drift this replaced.
+      - name: Resolve the workbench ref
         id: ui
+        env:
+          OVERRIDE: ${{ vars.OPEN_LEASE_UI_REF }}
+          TAG: ${{ github.ref_name }}
+          UI_REPO: https://github.com/mfbaig35r/open-lease-ui.git
         run: |
-          ref='${{ vars.OPEN_LEASE_UI_REF }}'
-          if [ -z "$ref" ]; then
-            echo "::warning title=UI ref not pinned::OPEN_LEASE_UI_REF is unset, so the workbench is being built from open-lease-ui main. This release is not reproducible from its tag alone. Set the variable to a UI tag."
-            ref=main
+          if [ -n "$OVERRIDE" ]; then
+            ref="$OVERRIDE"
+            echo "::warning title=Workbench ref overridden::Building the workbench from '$ref', not from this release's tag '$TAG', because the OPEN_LEASE_UI_REF variable is set. Unset it to derive the ref from the tag."
+          else
+            ref="$TAG"
+          fi
+          if ! git ls-remote --exit-code "$UI_REPO" "refs/tags/$ref" >/dev/null 2>&1 \
+             && ! git ls-remote --exit-code "$UI_REPO" "refs/heads/$ref" >/dev/null 2>&1; then
+            echo "::error title=No matching workbench::open-lease-ui has no ref '$ref'. Tag the workbench with this version before releasing (scripts/release.py does it), or set OPEN_LEASE_UI_REF to an existing ref."
+            exit 1
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "derived=$([ -n "$OVERRIDE" ] && echo no || echo yes)" >> "$GITHUB_OUTPUT"
 
       - name: Check out open-lease-ui
         uses: actions/checkout@v4
@@ -37,15 +52,20 @@ jobs:
           ref: ${{ steps.ui.outputs.ref }}
           path: ui-src
 
-      # Record which UI actually went into this wheel, on the run page. Without this, "which
+      # Record which workbench actually went into this wheel, on the run page. Without this, "which
       # workbench shipped in 0.4.0" is only answerable by digging through checkout logs.
-      - name: Record the bundled UI commit
+      - name: Record the bundled workbench
         working-directory: ui-src
         run: |
           {
             echo "### Bundled workbench"
             echo "- open-lease-ui ref: \`${{ steps.ui.outputs.ref }}\`"
             echo "- commit: \`$(git rev-parse HEAD)\`"
+            if [ "${{ steps.ui.outputs.derived }}" = "yes" ]; then
+              echo "- derived from the release tag"
+            else
+              echo "- **overridden** by the OPEN_LEASE_UI_REF variable, not derived from the tag"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: pnpm/action-setup@v4
         with:

@@ -83,22 +83,31 @@ What it does, so you can do it by hand if it ever gets in the way:
    in either repo and not already on PyPI. `git`, `gh`, `uv`, `pnpm` present and `gh` logged in.
 2. **Version.** `version` in `pyproject.toml`, `version` in the UI's `package.json` (the workbench is
    versioned in lockstep, since it ships only inside this wheel), and the CHANGELOG's `[Unreleased]`
-   section closed as the new version with today's date plus its compare link.
+   section closed as the new version with today's date (UTC, like the tag) plus its compare link.
 3. **Verify.** `pnpm bundle` for the workbench, then `ruff check`, `ruff format --check`, the suite,
    `uv build`, `twine check`, and an install of the built wheel into a throwaway venv to confirm it
    reports the new version and carries `gpu_orchestrator/web/index.html`.
 4. **Confirm.** Everything to here is local and revertible (`git checkout -- pyproject.toml
    CHANGELOG.md`). It prints what it is about to do and waits.
-5. **Publish.** Commit + push + tag the UI repo, `gh variable set OPEN_LEASE_UI_REF <tag>` and read it
-   back, then commit, tag, and push here. The pin has to be set before the release tag is pushed,
-   since pushing the tag is what starts the workflow that reads it.
+5. **Publish.** Commit + push + tag the UI repo, then commit, tag, and push here. The UI tag goes
+   first because pushing the release tag is what starts the workflow that resolves it.
 
-The released wheel bundles the workbench from the ref in the `OPEN_LEASE_UI_REF` repository variable,
-pinned to an open-lease-ui tag so a backend tag reproduces exactly one wheel. **The pin does not
-update itself**, which is why moving it is a step in the script rather than a line in this list: skip
-it and the release silently ships the previous workbench. The publish run's summary records the
-workbench ref and commit it bundled, so check that it names the tag you meant, then install from PyPI
-into a scratch venv as a final check.
+### Which workbench a release bundles
+
+The publish workflow **derives** the workbench ref from the release tag: `v0.5.0` here builds
+open-lease-ui at `v0.5.0`. That is why the two version in lockstep, and why there is nothing to keep
+in step by hand: the tag names the workbench. If open-lease-ui has no matching tag, the workflow fails
+before it builds anything, with a message saying to tag the workbench first.
+
+`OPEN_LEASE_UI_REF` remains as a **deliberate override** for the rare release that needs a workbench
+other than its own version (a backend-only fix on an older UI, or a `main` build to exercise the
+pipeline). It is normally unset. When it is set, the workflow warns, the run summary marks the
+workbench as overridden rather than derived, and `scripts/release.py` reports it during preflight and
+again at the confirmation prompt: an override is legitimate but should never be an accident. Clear one
+with `gh variable delete OPEN_LEASE_UI_REF`.
+
+Either way, the run summary records the workbench ref and commit that went into the wheel, so check
+that it says what you expect, then install from PyPI into a scratch venv as a final check.
 
 The script's file surgery is covered by `tests/unit/test_release_script.py`, so a change to the
 CHANGELOG format that would break a release fails in CI first.
