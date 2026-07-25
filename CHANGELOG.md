@@ -6,6 +6,10 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+Release tooling only. Nothing in the installed package changed, so upgrading from 0.4.0 gains
+nothing at runtime: the work is in how releases are cut and in what a release tag guarantees about
+the workbench it bundles.
+
 ### Added
 - `scripts/release.py` cuts a release in one command, so no step depends on remembering it. It
   preflights (both repos clean and synced, the version untagged in both and not already on PyPI, since
