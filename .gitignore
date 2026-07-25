@@ -14,5 +14,6 @@ build/
 gpu-orchestrator.toml
 .env
 
-# bundled open-lease-ui (built via open-lease-ui  ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND  No package.json (or package.yaml, or package.json5) was found in "/Users/fbaig/Projects/open-lease".)
+# bundled open-lease-ui: a build output, produced by `pnpm bundle` in the open-lease-ui repo, and by
+# the publish workflow at release time. Re-included in the wheel/sdist via hatch `artifacts`.
 src/gpu_orchestrator/web/

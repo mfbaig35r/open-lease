@@ -6,6 +6,8 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-25
+
 ### Added
 - Multi-GPU (tensor-parallel) deploys. A model whose profile sets `tensor_parallel > 1` now
   provisions a pod with that many GPUs and shards vLLM across them. `InstanceRequest.gpu_count` is
@@ -67,6 +69,11 @@ All notable changes to open-lease are documented here. The format follows
 - REST API: a domain validator rejection (a concurrency cap below 1, a budget limit of 0) now returns
   400 with the validator's message instead of a 500, and an unknown budget or autoscale policy id
   returns 404 (new `PolicyNotFoundError`).
+- The bundled visual workbench (`gpu ui`) covers the capacity envelope: a Capacity page for spend
+  ceilings, replica count, and autoscaling policies, plus a schedule and concurrency-limit editor on
+  each deployment. A deployment whose state a policy explains now says so (scheduled off, budget
+  hold), and a schedule that nothing is applying (no daemon running) is called out instead of looking
+  broken. The release wheel builds it from open-lease-ui `main`.
 
 ### Fixed
 - `GPU_ORCH_CORS_ORIGINS` works again. pydantic-settings JSON-decodes a list field's env value before
@@ -135,6 +142,8 @@ Initial public release: the orchestration core plus three interfaces over it.
 - Background daemon (reconcile / health / orphan sweep / cost snapshot / event retention),
   per-deployment cost tracking, and download-progress reporting during bring-up.
 
-[Unreleased]: https://github.com/mfbaig35r/open-lease/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mfbaig35r/open-lease/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mfbaig35r/open-lease/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/mfbaig35r/open-lease/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mfbaig35r/open-lease/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mfbaig35r/open-lease/releases/tag/v0.1.0
