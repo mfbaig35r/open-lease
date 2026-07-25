@@ -61,28 +61,47 @@ The full, non-negotiable list is in [CLAUDE.md](CLAUDE.md). The ones that matter
 
 ## Cutting a release
 
+Run the script:
+
+```bash
+uv run python scripts/release.py 0.5.0 --dry-run   # preflight + verify, change nothing
+uv run python scripts/release.py 0.5.0             # verify, then ask before publishing
+```
+
+Land and push the workbench work in [open-lease-ui](https://github.com/mfbaig35r/open-lease-ui)
+first, and write the release notes under `## [Unreleased]` in the CHANGELOG. The script does the rest
+and refuses to release an empty `[Unreleased]` section.
+
 Publishing is tag-push, not a GitHub Release: a `v*` tag runs `.github/workflows/publish.yml`, which
 builds the sdist and wheel and publishes to PyPI via Trusted Publishing. A version can never be
-re-uploaded, so the order matters.
+re-uploaded, which is why the script checks PyPI before it starts and stops for confirmation before
+anything irreversible.
 
-The released wheel bundles the visual workbench, built in CI from the ref in the
-`OPEN_LEASE_UI_REF` repository variable. That variable is **pinned to an open-lease-ui tag** so a
-backend tag reproduces exactly one wheel. It does not update itself, so bumping it is part of the
-ritual: skip it and the release silently ships the previous workbench.
+What it does, so you can do it by hand if it ever gets in the way:
 
-1. Land and push the workbench work in [open-lease-ui](https://github.com/mfbaig35r/open-lease-ui),
-   then tag it (`git tag -a v0.5.0 -m "..." && git push origin v0.5.0`). The UI is versioned in
-   lockstep with open-lease, since it ships only inside this wheel.
-2. Point the pin at that tag: `gh variable set OPEN_LEASE_UI_REF --body v0.5.0`.
-3. Here: bump `version` in `pyproject.toml`, close the `[Unreleased]` CHANGELOG section as the new
-   version with its date, and add its compare link at the bottom.
-4. Verify locally before tagging anything: `uv run ruff check src/ tests/`,
-   `uv run ruff format --check src/ tests/`, `uv run python -m pytest tests/ -q`, then `uv build` and
-   install the wheel into a scratch venv to confirm it reports the new version and ships
-   `gpu_orchestrator/web/index.html`.
-5. Commit, then `git tag -a v0.5.0 -m "..." && git push origin main v0.5.0`.
-6. Watch the run. Its summary records the UI ref and commit that went into the wheel, so check that
-   it is the tag you meant. Then install from PyPI into a scratch venv as a final check.
+1. **Preflight.** Both repos clean, on `main`, in sync with origin. The version is not already tagged
+   in either repo and not already on PyPI. `git`, `gh`, `uv`, `pnpm` present and `gh` logged in.
+2. **Version.** `version` in `pyproject.toml`, `version` in the UI's `package.json` (the workbench is
+   versioned in lockstep, since it ships only inside this wheel), and the CHANGELOG's `[Unreleased]`
+   section closed as the new version with today's date plus its compare link.
+3. **Verify.** `pnpm bundle` for the workbench, then `ruff check`, `ruff format --check`, the suite,
+   `uv build`, `twine check`, and an install of the built wheel into a throwaway venv to confirm it
+   reports the new version and carries `gpu_orchestrator/web/index.html`.
+4. **Confirm.** Everything to here is local and revertible (`git checkout -- pyproject.toml
+   CHANGELOG.md`). It prints what it is about to do and waits.
+5. **Publish.** Commit + push + tag the UI repo, `gh variable set OPEN_LEASE_UI_REF <tag>` and read it
+   back, then commit, tag, and push here. The pin has to be set before the release tag is pushed,
+   since pushing the tag is what starts the workflow that reads it.
+
+The released wheel bundles the workbench from the ref in the `OPEN_LEASE_UI_REF` repository variable,
+pinned to an open-lease-ui tag so a backend tag reproduces exactly one wheel. **The pin does not
+update itself**, which is why moving it is a step in the script rather than a line in this list: skip
+it and the release silently ships the previous workbench. The publish run's summary records the
+workbench ref and commit it bundled, so check that it names the tag you meant, then install from PyPI
+into a scratch venv as a final check.
+
+The script's file surgery is covered by `tests/unit/test_release_script.py`, so a change to the
+CHANGELOG format that would break a release fails in CI first.
 
 ## Pull requests
 

@@ -6,6 +6,22 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `scripts/release.py` cuts a release in one command, so no step depends on remembering it. It
+  preflights (both repos clean and synced, the version untagged and not already on PyPI, since a PyPI
+  version can never be re-uploaded), bumps the version and closes the CHANGELOG section, bundles the
+  workbench, runs ruff + the suite + `uv build` + `twine check` + a scratch-venv install of the built
+  wheel, then stops for confirmation before anything irreversible. Only then does it tag the UI repo,
+  move `OPEN_LEASE_UI_REF` to that tag, and commit/tag/push here. `--dry-run` verifies and changes
+  nothing; `--yes` skips the prompt.
+
+### Changed
+- The bundled workbench is pinned: the publish workflow builds it from the `OPEN_LEASE_UI_REF`
+  repository variable (now an open-lease-ui tag) rather than that repo's `main`, so a backend tag
+  identifies exactly one wheel. The workflow warns when the pin is unset instead of quietly falling
+  back to `main`, and writes the workbench ref and commit it used into the run summary. Moving the pin
+  is a step in `scripts/release.py`, because a pin nobody bumps silently ships a stale UI.
+
 ## [0.4.0] - 2026-07-25
 
 ### Added
