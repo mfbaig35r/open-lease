@@ -134,6 +134,14 @@ def test_cors_origins_env_csv_parses():
     assert cfg.cors_origins == ["https://a.example", "https://b.example"]
 
 
+def test_cors_origins_from_the_actual_env_var(monkeypatch):
+    """The documented way to set this is GPU_ORCH_CORS_ORIGINS, and the env path is not the same
+    code as an init kwarg: pydantic-settings JSON-decodes a list field's env value before any
+    validator runs, so without NoDecode a comma-separated value raised SettingsError at startup."""
+    monkeypatch.setenv("GPU_ORCH_CORS_ORIGINS", "https://a.example, https://b.example")
+    assert Config().cors_origins == ["https://a.example", "https://b.example"]
+
+
 def test_get_unknown_is_404(tmp_path):
     resp = _client(tmp_path).get("/deployments/nope")
     assert resp.status_code == 404

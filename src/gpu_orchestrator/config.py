@@ -17,10 +17,12 @@ from __future__ import annotations
 import re
 import socket
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import (
     BaseSettings,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
@@ -125,7 +127,10 @@ class Config(BaseSettings):
     # Opt-in cross-origin: origins the hosted workbench may call this API from. Empty = off (the API
     # is same-origin only). Set via GPU_ORCH_CORS_ORIGINS (comma-separated) or `gpu serve
     # --cors-origin`. Never use "*": that would let any site drive a running server (spec §12 note).
-    cors_origins: list[str] = Field(default_factory=list)
+    # NoDecode is load-bearing: without it pydantic-settings JSON-decodes a list field's env value
+    # before any validator runs, so a comma-separated GPU_ORCH_CORS_ORIGINS raised SettingsError at
+    # startup instead of reaching _split_csv.
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator("cors_origins", mode="before")
     @classmethod

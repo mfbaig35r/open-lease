@@ -68,6 +68,13 @@ All notable changes to open-lease are documented here. The format follows
   400 with the validator's message instead of a 500, and an unknown budget or autoscale policy id
   returns 404 (new `PolicyNotFoundError`).
 
+### Fixed
+- `GPU_ORCH_CORS_ORIGINS` works again. pydantic-settings JSON-decodes a list field's env value before
+  any validator runs, so the documented comma-separated form raised `SettingsError` at startup and
+  every command failed while it was set. The field is now `Annotated[list[str], NoDecode]` so the
+  CSV validator sees the raw string, with a test that goes through the env var rather than an init
+  kwarg (the kwarg path never had the bug, which is why the old test passed).
+
 ### Changed
 - The schedule window-spec parser moved from `cli/main.py` to `core/schedule.py` (`build_schedule`),
   so the CLI and the MCP tool share one parser instead of each interface growing its own. Behavior is
