@@ -6,6 +6,21 @@ All notable changes to open-lease are documented here. The format follows
 
 ## [Unreleased]
 
+No runtime changes, and none in the workbench either. The engine, CLI, REST API, MCP server, proxy,
+and the bundled workbench are identical to 0.5.0. This release exists so the two copies of the
+workbench, the one bundled in the wheel and the one hosted at
+[workbench.openlease.canonicalresearch.dev](https://workbench.openlease.canonicalresearch.dev), are
+built from the same tag.
+
+### Changed
+- The hosted workbench deploys on a version tag instead of on every push to open-lease-ui's `main`, so
+  what is live matches a release rather than whatever landed last. Vercel's git integration deploys
+  branch pushes only (a tag push produces no deployment at all, verified directly), so branch deploys
+  are switched off in `vercel.json` and a workflow in open-lease-ui supplies the tag trigger, deploying
+  the tagged commit rather than the head of `main`. Pull-request previews are unaffected, and a
+  `workflow_dispatch` covers a hosted-only fix that should not wait for a release. One version tag now
+  updates both copies of the workbench.
+
 ## [0.5.0] - 2026-07-25
 
 Release tooling only. Nothing in the installed package changed, so upgrading from 0.4.0 gains
