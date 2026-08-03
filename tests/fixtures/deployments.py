@@ -14,6 +14,7 @@ from gpu_orchestrator.models import (
     DeploymentState,
     FailureInfo,
     Instance,
+    RuntimeProfile,
     StateTransition,
 )
 
@@ -38,11 +39,14 @@ def make_deployment(
     deployment_id: str = "dep-a1b2c3",
     with_instance: bool | None = None,
     failure: FailureInfo | None = None,
+    profile: RuntimeProfile | None = None,
 ) -> Deployment:
     """Build a Deployment in ``state``.
 
     ``with_instance`` defaults to True for any state that implies a live pod (BOOTING onward,
     excluding STOPPED/FAILED which have had their instance destroyed by the cost-safety rule).
+    ``profile`` overrides the default small-model profile, for tests that turn on a profile-carried
+    value such as ``startup_timeout_seconds``.
     """
     live_states = {
         DeploymentState.BOOTING,
@@ -68,7 +72,7 @@ def make_deployment(
         if state in {DeploymentState.STOPPING, DeploymentState.STOPPED}
         else DeploymentState.READY,
         observed_state=state,
-        profile=QWEN3_06B_PROFILE,
+        profile=profile or QWEN3_06B_PROFILE,
         instance=RUNNING_INSTANCE if with_instance else None,
         endpoint_url=endpoint,
         state_history=[
