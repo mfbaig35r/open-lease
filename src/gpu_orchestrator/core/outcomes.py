@@ -113,7 +113,7 @@ def apply_stage_budget(
     retryable failure, so the reconciler tears the pod down instead of paying for a stalled boot
     forever (spec §7.3). Only fires once we have actually been sitting in ``observed`` (its
     transition is already recorded); a state entered this same tick is not yet over budget."""
-    budget = _stage_budget(observed, config)
+    budget = _stage_budget(deployment, observed, config)
     if budget is None or deployment.observed_state != observed:
         return
     if deployment.failure is not None and deployment.failure.stage == observed:
@@ -184,12 +184,21 @@ def instance_id(deployment: Deployment) -> str | None:
     return deployment.instance.provider_instance_id if deployment.instance else None
 
 
-def _stage_budget(observed: DeploymentState, config: Config) -> int | None:
+def _stage_budget(deployment: Deployment, observed: DeploymentState, config: Config) -> int | None:
+    """The seconds a deployment may sit in ``observed`` before the stage budget trips.
+
+    STARTING is special. ``map_to_observed_state`` never yields DOWNLOADING (a running pod whose
+    runtime is not answering yet reads as STARTING), so a cold start pulls its whole model inside
+    the STARTING stage. The per-model ``startup_timeout_seconds`` is the declared override for
+    exactly that budget, so honor it here instead of holding every model to one global default.
+    """
+    if observed is DeploymentState.STARTING:
+        declared = deployment.profile.validation.startup_timeout_seconds
+        return declared if declared > 0 else config.timeout_starting
     return {
         DeploymentState.PROVISIONING: config.timeout_provisioning,
         DeploymentState.BOOTING: config.timeout_booting,
         DeploymentState.DOWNLOADING: config.timeout_download,
-        DeploymentState.STARTING: config.timeout_starting,
     }.get(observed)
 
 
