@@ -72,6 +72,48 @@ def summary(store: Store, deployment: Deployment, now: datetime | None = None) -
     )
 
 
+def observed_throughput(
+    store: Store,
+    model_id: str,
+    *,
+    gpu_names: set[str] | None = None,
+    now: datetime | None = None,
+) -> tuple[float, str] | None:
+    """Tokens/sec measured for ``model_id`` across this install's own past deployments, paired with
+    a short provenance string. ``None`` when nothing has been measured.
+
+    Throughput is a property of (model, GPU, runtime), not of the model alone, so a measurement is
+    only reused when the deployment's GPU is one of ``gpu_names``. Callers pass every alias for the
+    GPU they mean (catalog id and provider SKU), because profiles record either one.
+
+    Deployments with cost records but no tokens are skipped rather than counted as zero throughput:
+    a pod that was rented and never asked to serve says nothing about how fast the model runs.
+    """
+    now = now or _utcnow()
+    tokens = 0
+    uptime = 0.0
+    matched = 0
+    for deployment in store.list_deployments(include_stopped=True):
+        if deployment.model_id != model_id:
+            continue
+        if gpu_names is not None and deployment.profile.recommended_gpu not in gpu_names:
+            continue
+        _, prompt, completion = store.get_usage_totals(deployment.id)
+        if not (prompt + completion):
+            continue
+        records = store.get_cost_records(deployment.id)
+        seconds = sum(((r.stopped_at or now) - r.started_at).total_seconds() for r in records)
+        if seconds <= 0:
+            continue
+        tokens += prompt + completion
+        uptime += seconds
+        matched += 1
+    if not tokens or uptime <= 0:
+        return None
+    plural = "" if matched == 1 else "s"
+    return round(tokens / uptime, 1), f"measured over {matched} past deployment{plural}"
+
+
 def _loads(text: str) -> dict | None:
     try:
         obj = json.loads(text)

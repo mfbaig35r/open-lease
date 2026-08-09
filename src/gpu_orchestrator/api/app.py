@@ -70,6 +70,7 @@ class EstimateRequest(BaseModel):
     model_id: str
     provider: str = "runpod"
     hours: float = 1.0
+    gpu: str | None = None  # required to price a model with no catalog entry and no history
 
 
 class LimitsRequest(BaseModel):
@@ -278,7 +279,7 @@ def create_app(
     @app.post("/estimate")
     async def estimate(body: EstimateRequest) -> CostEstimate:
         return await orchestrator.estimate_cost(
-            body.model_id, provider=body.provider, hours=body.hours
+            body.model_id, provider=body.provider, hours=body.hours, gpu=body.gpu
         )
 
     from ..proxy.openai_proxy import create_proxy_app

@@ -24,6 +24,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from ..models import (
+    CostEstimate,
     CostRecord,
     Deployment,
     DeploymentState,
@@ -396,3 +397,25 @@ def autoscale_table(policies: list[AutoscalePolicy]) -> None:
             f"{policy.target_rpm_per_replica:g}",
         )
     console.print(table)
+
+
+def estimate_view(est: CostEstimate) -> None:
+    """Both cost metrics, with the per-token line shown only when a real measurement backs it.
+
+    Printing "cost_per_mtok: unknown" on every first estimate would train people to ignore the line,
+    so the absence is stated once, as a hint about how to obtain it, rather than as a value.
+    """
+    console.print(
+        f"{escape(est.model_id)} on {est.provider} ({est.gpu_type}): "
+        f"${est.estimated_usd:.4f} for {est.hours}h (${est.gpu_hourly_usd:.4f}/hr)"
+    )
+    if est.cost_per_mtok is None:
+        console.print(
+            "[dim]cost/Mtok: no throughput measured yet for this model on this GPU. "
+            "Deploy and serve traffic, then estimate again.[/dim]"
+        )
+        return
+    console.print(
+        f"[dim]cost/Mtok: [/dim]${est.cost_per_mtok:,.2f}"
+        f"[dim] at {est.observed_tokens_per_sec:g} tok/s ({est.throughput_basis})[/dim]"
+    )
