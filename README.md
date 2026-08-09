@@ -97,6 +97,8 @@ a curated, validated entry to the catalog is a small TOML edit (see
 - [Adding a provider](docs/adding-a-provider.md) — implement the Provider ABC against the contract.
 - [Phase 4 (Swamp extension)](docs/phase-4-swamp.md) — requirements for the front end that consumes
   the REST API.
+- [ADR: adaptive model execution planning](docs/adr-adaptive-execution-planning.md): why open-lease
+  does not plan execution across the memory hierarchy, measured rather than argued.
 
 ## What's not done
 
