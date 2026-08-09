@@ -532,17 +532,15 @@ def estimate(
     model: str,
     provider: str = typer.Option("runpod", "--provider"),
     hours: float = typer.Option(1.0, "--hours"),
+    gpu: str | None = typer.Option(None, "--gpu", help="Price on this GPU (needed for ad-hoc)."),
     json_: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Estimate cost without deploying."""
-    est = _run(_orchestrator().estimate_cost(model, provider=provider, hours=hours))
+    """Estimate cost without deploying, per hour and per million tokens."""
+    est = _run(_orchestrator().estimate_cost(model, provider=provider, hours=hours, gpu=gpu))
     if json_:
         render.emit_json(est)
         return
-    render.console.print(
-        f"{est.model_id} on {est.provider} ({est.gpu_type}): "
-        f"${est.estimated_usd:.4f} for {est.hours}h (${est.gpu_hourly_usd:.4f}/hr)"
-    )
+    render.estimate_view(est)
 
 
 @app.command()

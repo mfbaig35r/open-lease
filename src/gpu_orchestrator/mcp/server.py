@@ -241,9 +241,15 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
         return [v.model_dump(mode="json") for v in await orchestrator.list_volumes()]
 
     @mcp.tool
-    async def estimate_cost(model_id: str, provider: str = "runpod", hours: float = 1.0) -> dict:
-        """Estimate the cost of running a model for some hours, without deploying."""
-        est = await orchestrator.estimate_cost(model_id, provider=provider, hours=hours)
+    async def estimate_cost(
+        model_id: str, provider: str = "runpod", hours: float = 1.0, gpu: str | None = None
+    ) -> dict:
+        """Estimate the cost of running a model for some hours, without deploying.
+
+        Returns both the hourly rate and cost per million tokens. cost_per_mtok is null unless this
+        install has already measured this model on this GPU; it is never estimated from theory.
+        Pass gpu to price a model that has no catalog entry."""
+        est = await orchestrator.estimate_cost(model_id, provider=provider, hours=hours, gpu=gpu)
         return est.model_dump(mode="json")
 
     @mcp.tool

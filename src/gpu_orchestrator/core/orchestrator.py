@@ -18,7 +18,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from ..config import Config
-from ..errors import BudgetExceededError, OrchestratorError, ReconcileError
+from ..errors import BudgetExceededError, ModelNotFoundError, OrchestratorError, ReconcileError
 from ..events import EventLog
 from ..logging import correlation_context, get_logger
 from ..models import (
@@ -490,18 +490,49 @@ class Orchestrator:
         await self._provider(provider).delete_volume(volume_id)
 
     async def estimate_cost(
-        self, model_id: str, *, provider: str = "runpod", hours: float = 1.0
+        self,
+        model_id: str,
+        *,
+        provider: str = "runpod",
+        hours: float = 1.0,
+        gpu: str | None = None,
     ) -> CostEstimate:
-        profile = self._catalog.get_profile(model_id)
+        """Price a model without deploying, in both metrics: hourly rate and cost per million
+        tokens. Per-token is filled in only from throughput this install has actually measured for
+        this model on this GPU, and is left absent otherwise (issue #25).
+
+        Works for ad-hoc models with no catalog entry: an explicit ``gpu`` wins, then the catalog,
+        then the GPU a previous deployment of this model used."""
+        wanted = gpu or self._estimate_gpu(model_id)
         caps = await self._provider(provider).capabilities()
-        gpu = _match_gpu(caps.gpu_types, profile.recommended_gpu)
+        matched = _match_gpu(caps.gpu_types, wanted)
+        observed = usage.observed_throughput(
+            self._store, model_id, gpu_names={matched.id, matched.provider_sku, wanted}
+        )
         return CostEstimate(
             model_id=model_id,
             provider=provider,
-            gpu_type=gpu.id,
-            gpu_hourly_usd=gpu.hourly_usd,
+            gpu_type=matched.id,
+            gpu_hourly_usd=matched.hourly_usd,
             hours=hours,
-            estimated_usd=round(gpu.hourly_usd * hours, 4),
+            estimated_usd=round(matched.hourly_usd * hours, 4),
+            observed_tokens_per_sec=observed[0] if observed else None,
+            throughput_basis=observed[1] if observed else None,
+        )
+
+    def _estimate_gpu(self, model_id: str) -> str:
+        """The GPU to price ``model_id`` on: catalog first, then this install's own history so an
+        ad-hoc deploy can be estimated too. Raises rather than defaulting to some arbitrary GPU,
+        since a silently-wrong GPU makes the whole estimate wrong."""
+        try:
+            return self._catalog.get_profile(model_id).recommended_gpu
+        except ModelNotFoundError:
+            pass
+        for deployment in self._store.list_deployments(include_stopped=True):
+            if deployment.model_id == model_id:
+                return deployment.profile.recommended_gpu
+        raise ModelNotFoundError(
+            f"No catalog entry or past deployment for {model_id!r}; pass a gpu to price it"
         )
 
     # --- internals ------------------------------------------------------------------

@@ -538,7 +538,18 @@ class CostRecord(BaseModel):
 
 
 class CostEstimate(BaseModel):
-    """Returned by ``estimate_cost`` without deploying (spec §7.1, §15)."""
+    """Returned by ``estimate_cost`` without deploying (spec §7.1, §15).
+
+    Carries both metrics on purpose. ``gpu_hourly_usd`` is what the provider bills;
+    ``cost_per_mtok`` is what the work actually costs, and the two disagree whenever throughput
+    differs between configurations (see docs/adr-adaptive-execution-planning.md, where the
+    cheaper-per-hour option is 3.2x to 22x worse per token). Neither alone answers "what should
+    I rent".
+
+    ``cost_per_mtok`` is ``None`` when this install has never served this model on this GPU. An
+    unmeasured throughput is reported absent, never guessed: a fabricated tokens/sec would make the
+    per-token figure look authoritative while being unfalsifiable.
+    """
 
     model_id: str
     provider: str
@@ -546,6 +557,15 @@ class CostEstimate(BaseModel):
     gpu_hourly_usd: float
     hours: float
     estimated_usd: float
+    observed_tokens_per_sec: float | None = None
+    throughput_basis: str | None = None  # provenance; None when nothing has been measured
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_per_mtok(self) -> float | None:
+        if not self.observed_tokens_per_sec:
+            return None
+        return round(self.gpu_hourly_usd / (self.observed_tokens_per_sec * 3600) * 1_000_000, 2)
 
 
 class UsageSummary(BaseModel):
