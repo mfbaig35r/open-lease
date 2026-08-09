@@ -209,6 +209,29 @@ def providers_table(providers: list[ProviderInfo]) -> None:
     console.print(table)
 
 
+def gpus_table(providers: list[ProviderInfo]) -> None:
+    """Per-GPU shapes including the host resources bundled with each (issue #26).
+
+    The summary row in ``providers_table`` lists GPU ids only, which cannot show that two GPUs at
+    a similar price ship very different hosts. Host RAM and vCPU are per GPU; an N-GPU pod scales
+    them.
+    """
+    table = Table(title="GPU shapes")
+    for col in ("PROVIDER", "GPU", "VRAM", "HOST RAM", "vCPU", "$/HR"):
+        table.add_column(col)
+    for info in providers:
+        for gpu in info.capabilities.gpu_types:
+            table.add_row(
+                info.name,
+                gpu.id,
+                f"{gpu.memory_gb} GB",
+                f"{gpu.host_ram_gb} GB" if gpu.host_ram_gb else "[dim]not reported[/dim]",
+                str(gpu.vcpu_count) if gpu.vcpu_count else "[dim]-[/dim]",
+                f"${gpu.hourly_usd:.2f}",
+            )
+    console.print(table)
+
+
 def costs_table(records: list[CostRecord]) -> None:
     if not records:
         console.print("[dim]No cost records yet.[/dim]")

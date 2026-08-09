@@ -45,6 +45,25 @@ async def test_capabilities_lists_gpu_types(provider):
     assert caps.gpu_types
 
 
+async def test_host_resources_are_absent_or_positive_never_zero(provider):
+    """Host RAM and vCPU are optional, but a reported value is never 0 (issue #26).
+
+    "Unknown" and "none allocated" are different facts. Collapsing them onto 0 would make a pod look
+    unusable for CPU-side work when the truth is that we simply did not ask.
+    """
+    caps = await provider.capabilities()
+    for gpu in caps.gpu_types:
+        assert gpu.host_ram_gb is None or gpu.host_ram_gb > 0
+        assert gpu.vcpu_count is None or gpu.vcpu_count > 0
+
+
+async def test_host_resources_are_reported_for_at_least_one_gpu(provider):
+    """A provider that can report host resources does. This is the regression guard for the gap in
+    issue #26: open-lease could not tell a 25GB-RAM pod from a 125GB-RAM one at the same price."""
+    caps = await provider.capabilities()
+    assert any(g.host_ram_gb and g.vcpu_count for g in caps.gpu_types)
+
+
 async def test_create_observe_destroy_roundtrip(provider):
     instance = await provider.create_instance(await _request(provider))
     try:
