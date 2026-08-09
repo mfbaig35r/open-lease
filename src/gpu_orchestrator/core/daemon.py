@@ -76,7 +76,7 @@ class Daemon:
             await reconcile_once(
                 deployment,
                 provider=self._provider(deployment.provider),
-                runtime=self._runtime(),
+                runtime=self._runtime(deployment),
                 catalog=self._catalog,
                 config=self._config,
                 store=self._store,
@@ -131,7 +131,7 @@ class Daemon:
                 await self._monitor.check_once(
                     deployment,
                     provider=self._provider(deployment.provider),
-                    runtime=self._runtime(),
+                    runtime=self._runtime(deployment),
                     store=self._store,
                     events=self._events,
                     now=now,
@@ -342,8 +342,11 @@ class Daemon:
     def _provider(self, name: str) -> Provider:
         return self._injected_provider or build_provider(self._config, name)
 
-    def _runtime(self):
-        return self._injected_runtime or build_runtime()
+    def _runtime(self, deployment: Deployment):
+        """The engine this deployment's profile asks for. ``profile.runtime`` existed from the start
+        but was ignored while vLLM was the only implementation, which would have quietly served a
+        llama.cpp profile with vLLM (issue #23)."""
+        return self._injected_runtime or build_runtime(deployment.profile.runtime)
 
 
 async def sweep_orphans(

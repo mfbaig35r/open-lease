@@ -446,7 +446,7 @@ class Orchestrator:
     async def get_health(self, deployment_id: str) -> HealthStatus:
         deployment = self._store.get_deployment(deployment_id)
         return await health.run_checks(
-            deployment, self._provider(deployment.provider), self._runtime()
+            deployment, self._provider(deployment.provider), self._runtime(deployment)
         )
 
     async def get_logs(
@@ -543,7 +543,7 @@ class Orchestrator:
         hammering the API; tests set the interval to 0. The daemon owns the loop for non-blocking
         deploys -- this is the caller-blocks path."""
         provider = self._provider(deployment.provider)
-        runtime = self._runtime()
+        runtime = self._runtime(deployment)
         for _ in range(_MAX_DRIVE_TICKS):
             if deployment.observed_state in until:
                 return deployment
@@ -568,8 +568,10 @@ class Orchestrator:
     def _provider(self, name: str) -> Provider:
         return self._injected_provider or build_provider(self._config, name)
 
-    def _runtime(self, name: str = "vllm") -> Runtime:
-        return self._injected_runtime or build_runtime(name)
+    def _runtime(self, deployment: Deployment) -> Runtime:
+        """The engine this deployment's profile asks for (spec §9). ``profile.runtime`` was inert
+        while vLLM was the only implementation; honoring it is what makes runtime #2 reachable."""
+        return self._injected_runtime or build_runtime(deployment.profile.runtime)
 
     def _emit(self, deployment: Deployment, kind: EventKind, payload: dict) -> None:
         self._events.emit(

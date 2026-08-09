@@ -54,6 +54,7 @@ class Runtime(ABC):
 
 
 # Populated from the concrete runtimes below. A dict, not a plugin loader (E1).
+from .llamacpp import LlamaCppRuntime  # noqa: E402
 from .vllm import VLLMRuntime  # noqa: E402
 
-RUNTIMES: dict[str, type[Runtime]] = {"vllm": VLLMRuntime}
+RUNTIMES: dict[str, type[Runtime]] = {"vllm": VLLMRuntime, "llamacpp": LlamaCppRuntime}
