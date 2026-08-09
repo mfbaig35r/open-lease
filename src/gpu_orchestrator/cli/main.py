@@ -478,13 +478,16 @@ def models(
 
 
 @app.command()
-def providers(json_: bool = typer.Option(False, "--json")) -> None:
+def providers(
+    gpus: bool = typer.Option(False, "--gpus", help="Per-GPU shapes: VRAM, host RAM, vCPU, price."),
+    json_: bool = typer.Option(False, "--json"),
+) -> None:
     """List configured providers and their capabilities."""
     infos = _run(_orchestrator().list_providers())
     if json_:
         render.emit_json(infos)
         return
-    render.providers_table(infos)
+    render.gpus_table(infos) if gpus else render.providers_table(infos)
 
 
 @app.command()

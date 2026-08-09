@@ -199,11 +199,24 @@ class RuntimeOverrides(BaseModel):
 
 
 class GPUType(BaseModel):
+    """One rentable GPU shape. ``memory_gb`` is VRAM; the host fields ship bundled with it.
+
+    Providers sell host RAM and vCPU as a fixed ratio of the GPU, not as independent dials, so
+    these are properties of the GPU shape rather than a separate request. Both are **per GPU**:
+    an N-GPU pod gets roughly N times these values.
+
+    They are ``None`` when the provider does not report them, never 0. "Unknown" and "none
+    allocated" are different facts, and a 0 would make a pod look unusable for host-side work when
+    the truth is that we never asked (issue #26).
+    """
+
     id: str
     name: str
     memory_gb: int
     hourly_usd: float
     provider_sku: str
+    host_ram_gb: int | None = None
+    vcpu_count: int | None = None
 
 
 class VolumeSpec(BaseModel):

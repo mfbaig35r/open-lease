@@ -29,6 +29,8 @@ _MOCK_GPU = GPUType(
     memory_gb=24,
     hourly_usd=0.50,
     provider_sku="mock-gpu",
+    host_ram_gb=32,
+    vcpu_count=8,
 )
 
 # Catalog-parity GPUs so the real catalog's profiles (which recommend RunPod GPU ids) resolve
@@ -41,6 +43,8 @@ _CATALOG_PARITY = [
         memory_gb=16,
         hourly_usd=0.17,
         provider_sku="RTX-A4000",
+        host_ram_gb=62,
+        vcpu_count=16,
     ),
     GPUType(
         id="A40-48GB",
@@ -48,6 +52,8 @@ _CATALOG_PARITY = [
         memory_gb=48,
         hourly_usd=0.44,
         provider_sku="A40-48GB",
+        host_ram_gb=50,
+        vcpu_count=9,
     ),
     GPUType(
         id="A100-80GB",
@@ -55,8 +61,12 @@ _CATALOG_PARITY = [
         memory_gb=80,
         hourly_usd=1.89,
         provider_sku="A100-80GB",
+        host_ram_gb=117,
+        vcpu_count=8,
     ),
     GPUType(
+        # Deliberately reports no host resources, so the "provider did not say" path stays
+        # exercised by the contract suite rather than only existing in theory.
         id="H100-80GB",
         name="Mock H100 80GB",
         memory_gb=80,

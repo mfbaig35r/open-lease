@@ -37,6 +37,11 @@ _RUNNING = "RUNNING"
 _log = get_logger("providers.runpod")
 
 # Curated Phase 1 GPU menu. Rates are approximate and refined by catalog validation metadata (§14).
+# host_ram_gb / vcpu_count are per GPU, read from the RunPod GraphQL API on 2026-08-09:
+#   gpuTypes { lowestPrice(input:{gpuCount:1}) { minMemory minVcpu } }
+# They are static for the same reason the rates are: capabilities() sits on the reconciler's
+# create path (core/reconciler.py::_resolve_gpu), so putting a network round trip behind it would
+# make every deploy depend on a second API being up. Refresh with the query above (issue #26).
 _GPU_TYPES = [
     GPUType(
         id="RTX-A4000",
@@ -44,6 +49,8 @@ _GPU_TYPES = [
         memory_gb=16,
         hourly_usd=0.17,
         provider_sku="NVIDIA RTX A4000",
+        host_ram_gb=62,
+        vcpu_count=16,
     ),
     GPUType(
         id="A40-48GB",
@@ -51,6 +58,8 @@ _GPU_TYPES = [
         memory_gb=48,
         hourly_usd=0.44,
         provider_sku="NVIDIA A40",
+        host_ram_gb=50,
+        vcpu_count=9,
     ),
     GPUType(
         id="A100-80GB",
@@ -58,6 +67,8 @@ _GPU_TYPES = [
         memory_gb=80,
         hourly_usd=1.89,
         provider_sku="NVIDIA A100 80GB PCIe",
+        host_ram_gb=117,
+        vcpu_count=8,
     ),
     GPUType(
         id="H100-80GB",
@@ -65,6 +76,8 @@ _GPU_TYPES = [
         memory_gb=80,
         hourly_usd=2.99,
         provider_sku="NVIDIA H100 80GB HBM3",
+        host_ram_gb=125,
+        vcpu_count=8,
     ),
 ]
 
