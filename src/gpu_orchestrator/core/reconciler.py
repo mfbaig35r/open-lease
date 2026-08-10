@@ -247,6 +247,7 @@ async def execute(
     catalog: Catalog,
     config: Config,
     store: Store,
+    events: EventLog,
     now: datetime,
 ) -> None:
     """The ONLY place side effects happen: a thin dispatcher, one provider/runtime call per action.
@@ -254,7 +255,7 @@ async def execute(
     compute. WAIT_*, MARK_*, and NONE have no side effect here -- the state is recorded by
     reconcile_once; for a waiting action, the passage of time is the "action"."""
     if action in (ReconcileAction.CREATE_INSTANCE, ReconcileAction.RETRY):
-        await _create_instance(deployment, provider, runtime, catalog, config, store, now)
+        await _create_instance(deployment, provider, runtime, catalog, config, store, events, now)
     elif action == ReconcileAction.DESTROY_INSTANCE:
         await _destroy_instance(deployment, provider, store, now)
     elif action == ReconcileAction.ADOPT_INSTANCE:
@@ -288,11 +289,13 @@ async def _create_instance(
     catalog: Catalog,
     config: Config,
     store: Store,
+    events: EventLog,
     now: datetime,
 ) -> None:
     spec = _resolve_spec(deployment, catalog)
     profile = deployment.profile
     gpu = await _resolve_gpu(provider, profile.recommended_gpu)
+    gpu = await _substitute_if_out_of_stock(deployment, gpu, provider, events)
     name = config.instance_name(deployment.id)
     request = runtime.build_instance_request(spec, profile, gpu, name=name)
     request = _inject_secrets(request, config)
@@ -388,6 +391,39 @@ async def _resolve_gpu(provider: Provider, wanted: str) -> GPUType:
     )
 
 
+async def _substitute_if_out_of_stock(
+    deployment: Deployment, wanted: GPUType, provider: Provider, events: EventLog
+) -> GPUType:
+    """Swap an out-of-stock recommendation for an in-stock GPU that is at least as large.
+
+    Best-effort by construction: an availability probe that fails, or a provider that does not
+    report availability at all, leaves the recommendation alone. The decision itself is the pure
+    ``outcomes.substitute_gpu``; this function is only the I/O and the audit trail.
+    """
+    if deployment.profile.gpu_pinned:
+        return wanted  # a human named this GPU; do not quietly run somewhere else
+    try:
+        rows = await provider.gpu_availability()
+    except OrchestratorError as exc:
+        _log.info("availability probe failed; keeping recommendation", extra={"error": str(exc)})
+        return wanted
+    available = {row.gpu_type_id for row in rows if row.available}
+    chosen = outcomes.substitute_gpu(wanted, (await provider.capabilities()).gpu_types, available)
+    if chosen is None:
+        return wanted
+    outcomes.emit(
+        events,
+        deployment,
+        EventKind.GPU_SUBSTITUTED,
+        {"from": wanted.id, "to": chosen.id, "reason": "recommended GPU out of stock"},
+    )
+    _log.info(
+        "substituted an in-stock GPU",
+        extra={"deployment": deployment.id, "from": wanted.id, "to": chosen.id},
+    )
+    return chosen
+
+
 def _inject_secrets(request: InstanceRequest, config: Config) -> InstanceRequest:
     """Credential handling lives in one place: the orchestrator, never the runtime (spec §9)."""
     if config.hf_token is None:
@@ -477,6 +513,7 @@ async def reconcile_once(
             catalog=catalog,
             config=config,
             store=store,
+            events=events,
             now=now,
         )
     except (ProviderError, RuntimeError_) as exc:

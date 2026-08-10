@@ -155,6 +155,7 @@ class Orchestrator:
         from that choice."""
         if runtime not in RUNTIMES:
             raise ReconcileError(f"unknown runtime {runtime!r} (have: {sorted(RUNTIMES)})")
+        pinned = gpu is not None  # explicit choice; a hub-sized GPU stays substitutable
         if gpu is None:
             gpu, sized_count = await self._size_from_hub(hf_repo, provider)
             gpu_count = gpu_count or sized_count
@@ -165,6 +166,7 @@ class Orchestrator:
             runtime=runtime,
             image=img,
             recommended_gpu=gpu,
+            gpu_pinned=pinned,
             tensor_parallel=gpu_count,
             min_disk_gb=disk_gb or _ADHOC_DISK_GB,
             validation=ValidationMetadata(
@@ -702,6 +704,7 @@ def _apply_overrides(
     chosen_gpu = gpu or (overrides.gpu if overrides else None)
     if chosen_gpu:
         updates["recommended_gpu"] = chosen_gpu
+        updates["gpu_pinned"] = True  # a named GPU is a decision, not a recommendation
     if overrides and overrides.launch_args:
         updates["launch_args"] = {**profile.launch_args, **overrides.launch_args}
     if overrides and overrides.env:

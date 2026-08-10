@@ -22,6 +22,7 @@ from ..models import (
     Event,
     EventKind,
     FailureInfo,
+    GPUType,
     ReconcileAction,
     StateTransition,
 )
@@ -207,3 +208,33 @@ def _entered_at(deployment: Deployment, state: DeploymentState) -> datetime | No
         if state_transition.to_state == state:
             return state_transition.at
     return None
+
+
+def substitute_gpu(
+    wanted: GPUType, gpu_types: list[GPUType], available_skus: set[str]
+) -> GPUType | None:
+    """The cheapest in-stock GPU at least as large as ``wanted``, or ``None`` to keep ``wanted``.
+
+    A recommended GPU that is out of stock does not make a deployment impossible, only that one
+    shape of it. RunPod ran out of A100 capacity in every data center on 2026-08-09 and a routine
+    deploy failed with a provider 500 while an A40 and an H100 sat available.
+
+    Never downsizes. A substitute with at least as much VRAM is guaranteed to still fit whatever the
+    recommendation was sized for, so this can run without consulting the model at all.
+
+    ``available_skus`` empty means "the provider did not tell us", NOT "nothing is available", so
+    the caller keeps the recommendation. Absence of data is not evidence of absence, and guessing
+    here would move a deploy off its validated hardware for no reason.
+    """
+    if not available_skus or wanted.provider_sku in available_skus:
+        return None
+    candidates = [
+        gpu
+        for gpu in gpu_types
+        if gpu.provider_sku in available_skus
+        and gpu.memory_gb >= wanted.memory_gb
+        and gpu.provider_sku != wanted.provider_sku
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda g: (g.hourly_usd, g.memory_gb))
