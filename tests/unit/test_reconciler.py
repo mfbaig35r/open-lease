@@ -332,3 +332,36 @@ async def test_reconcile_stage_budget_escalates_stuck_provisioning(tmp_path):
     assert dep.failure is not None
     assert dep.failure.stage == S.PROVISIONING
     assert dep.failure.retryable is True
+
+
+async def test_refresh_does_not_blank_a_gpu_type_the_provider_cannot_report(tmp_path):
+    """RunPod's REST pod GET returns machine:{} and no GPU field, so a refresh used to overwrite the
+    gpu_type set at create time with an empty string. `gpu status` showed a blank GPU column for
+    every running pod, and the throughput script could not tell what hardware it measured on."""
+
+    class _ForgetfulProvider(MockProvider):
+        async def get_instance(self, provider_instance_id: str):
+            live = await super().get_instance(provider_instance_id)
+            return live.model_copy(update={"gpu_type": "", "ports": []}) if live else None
+
+    ctx = _ctx(tmp_path, _ForgetfulProvider(namespace="test"))
+    dep = await _drive(_new_deployment(), ctx, until={S.READY, S.FAILED})
+    assert dep.instance is not None
+    # The provider SKU, which is what create_instance records (InstanceRequest carries the SKU,
+    # not the catalog id). The point is that it survives a refresh, not which spelling it is.
+    assert dep.instance.gpu_type == "mock-gpu", "a refresh must not discard what create established"
+
+
+async def test_a_provider_that_does_report_a_gpu_type_still_wins(tmp_path):
+    """Carry-forward only fills gaps. If the provider genuinely reports different hardware, that is
+    the truth and must not be masked."""
+
+    class _RelocatingProvider(MockProvider):
+        async def get_instance(self, provider_instance_id: str):
+            live = await super().get_instance(provider_instance_id)
+            return live.model_copy(update={"gpu_type": "SOMETHING-ELSE"}) if live else None
+
+    ctx = _ctx(tmp_path, _RelocatingProvider(namespace="test"))
+    dep = await _drive(_new_deployment(), ctx, until={S.READY, S.FAILED})
+    assert dep.instance is not None
+    assert dep.instance.gpu_type == "SOMETHING-ELSE"

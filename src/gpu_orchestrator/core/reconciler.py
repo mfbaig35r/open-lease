@@ -186,6 +186,28 @@ class Observation:
     download_progress: float | None = None
 
 
+def _carry_forward(known: Instance, refreshed: Instance | None) -> Instance | None:
+    """Keep facts a refresh cannot re-report, instead of blanking them.
+
+    RunPod's REST pod GET returns ``machine: {}`` and no GPU field at all, so every reconcile tick
+    replaced a known ``gpu_type`` with an empty string: ``gpu status`` showed a blank GPU column for
+    running pods, and anything reading the instance to find out what hardware it got (the throughput
+    measurement script) saw nothing. The provider is right that it does not know; it is not right to
+    overwrite what we already established at create time.
+
+    Only fills gaps. A provider that DOES report a value always wins, so this cannot mask a real
+    change of hardware underneath us.
+    """
+    if refreshed is None:
+        return None
+    updates: dict[str, object] = {}
+    if not refreshed.gpu_type and known.gpu_type:
+        updates["gpu_type"] = known.gpu_type
+    if not refreshed.ports and known.ports:
+        updates["ports"] = known.ports
+    return refreshed.model_copy(update=updates) if updates else refreshed
+
+
 async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) -> Observation:
     """Ask the provider and runtime what actually exists. Trusts reality, not our records: if the
     provider says the pod is gone, it is gone regardless of what SQLite holds (spec §7.3)."""
@@ -197,7 +219,9 @@ async def observe(deployment: Deployment, provider: Provider, runtime: Runtime) 
         instance = await provider.find_instance_by_deployment_id(deployment.id)
         adopted = instance is not None
     else:
-        instance = await provider.get_instance(instance.provider_instance_id)
+        instance = _carry_forward(
+            instance, await provider.get_instance(instance.provider_instance_id)
+        )
 
     endpoint_url: str | None = None
     health: HealthStatus | None = None
