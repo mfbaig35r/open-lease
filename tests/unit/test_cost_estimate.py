@@ -14,12 +14,22 @@ import pytest
 
 from gpu_orchestrator.config import Config
 from gpu_orchestrator.core import usage
-from gpu_orchestrator.core.catalog import Catalog
+from gpu_orchestrator.core.catalog import Catalog, load_catalog
 from gpu_orchestrator.core.orchestrator import Orchestrator
 from gpu_orchestrator.errors import ModelNotFoundError
-from gpu_orchestrator.models import CostEstimate, CostRecord, DeploymentState
+from gpu_orchestrator.models import (
+    CostEstimate,
+    CostRecord,
+    DeploymentState,
+    ValidationMetadata,
+)
 from gpu_orchestrator.providers.mock import MockProvider
-from tests.fixtures.catalog import QWEN3_06B_PROFILE, QWEN3_06B_SPEC
+from tests.fixtures.catalog import (
+    QWEN3_06B_PROFILE,
+    QWEN3_06B_SPEC,
+    QWEN3_32B_PROFILE,
+    QWEN3_32B_SPEC,
+)
 from tests.fixtures.deployments import make_deployment
 
 _T0 = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
@@ -28,7 +38,12 @@ _T0 = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
 def _orch(tmp_path) -> Orchestrator:
     return Orchestrator(
         Config(namespace="test", state_db=tmp_path / "est.db", reconcile_interval=0),
-        catalog=Catalog({"qwen3-0.6b": QWEN3_06B_SPEC}, {"qwen3-0.6b": QWEN3_06B_PROFILE}),
+        # qwen3-0.6b carries a measured baseline; qwen3-32b is launch-validated but never
+        # benchmarked. Both are real catalog states and the tests need each.
+        catalog=Catalog(
+            {"qwen3-0.6b": QWEN3_06B_SPEC, "qwen3-32b": QWEN3_32B_SPEC},
+            {"qwen3-0.6b": QWEN3_06B_PROFILE, "qwen3-32b": QWEN3_32B_PROFILE},
+        ),
         provider=MockProvider(namespace="test"),
     )
 
@@ -54,9 +69,10 @@ def _served(orch, *, deployment_id, model_id, gpu, tokens, seconds, started=_T0)
 # --- the absent-not-guessed rule -------------------------------------------------------
 
 
-async def test_no_history_reports_hourly_but_no_cost_per_token(tmp_path):
+async def test_no_history_and_no_baseline_reports_hourly_but_no_cost_per_token(tmp_path):
+    """qwen3-32b is launch-validated but never benchmarked, so there is nothing to report."""
     orch = _orch(tmp_path)
-    est = await orch.estimate_cost("qwen3-0.6b", provider="mock", hours=2.0)
+    est = await orch.estimate_cost("qwen3-32b", provider="mock", hours=2.0)
     assert est.estimated_usd == pytest.approx(est.gpu_hourly_usd * 2.0)
     assert est.cost_per_mtok is None
     assert est.observed_tokens_per_sec is None
@@ -121,12 +137,12 @@ async def test_measurement_from_a_different_gpu_is_not_reused(tmp_path):
     _served(
         orch,
         deployment_id="dep-aaa",
-        model_id="qwen3-0.6b",
+        model_id="qwen3-32b",  # no catalog baseline, so only the local measurement is in play
         gpu="A40-48GB",  # measured on a different GPU than the profile recommends
         tokens=3600,
         seconds=360,
     )
-    est = await orch.estimate_cost("qwen3-0.6b", provider="mock")
+    est = await orch.estimate_cost("qwen3-32b", provider="mock")
     assert est.cost_per_mtok is None, "throughput on one GPU says nothing about another"
 
 
@@ -181,3 +197,72 @@ async def test_unknown_model_with_no_gpu_and_no_history_raises(tmp_path):
     orch = _orch(tmp_path)
     with pytest.raises(ModelNotFoundError, match="pass a gpu"):
         await orch.estimate_cost("never-heard-of-it", provider="mock")
+
+
+# --- catalog baseline: the number must be visible before you have served anything ----------
+
+
+async def test_catalog_baseline_answers_on_a_fresh_install(tmp_path):
+    """The whole point: cost_per_mtok used to be null until you had already deployed and served
+    traffic, so the flagship number was invisible exactly when someone was deciding to use it."""
+    orch = _orch(tmp_path)
+    est = await orch.estimate_cost("qwen3-0.6b", provider="mock")
+    assert est.cost_per_mtok is not None
+    assert est.observed_tokens_per_sec == QWEN3_06B_PROFILE.validation.tokens_per_sec_concurrent
+    assert "catalog baseline" in est.throughput_basis
+
+
+async def test_local_traffic_beats_the_catalog_baseline(tmp_path):
+    """A baseline is a stand-in for your workload. Once this install has served real traffic, that
+    measurement is the better answer and must win."""
+    orch = _orch(tmp_path)
+    gpu = QWEN3_06B_PROFILE.recommended_gpu
+    _served(orch, deployment_id="dep-aaa", model_id="qwen3-0.6b", gpu=gpu, tokens=3600, seconds=360)
+    est = await orch.estimate_cost("qwen3-0.6b", provider="mock")
+    assert est.observed_tokens_per_sec == pytest.approx(10.0)
+    assert "past deployment" in est.throughput_basis
+
+
+async def test_baseline_is_not_reused_on_different_hardware(tmp_path):
+    """Throughput is a property of (model, GPU). A baseline measured on one card says nothing about
+    another, exactly as for locally-measured throughput."""
+    orch = _orch(tmp_path)
+    est = await orch.estimate_cost("qwen3-0.6b", provider="mock", gpu="A40-48GB")
+    assert est.cost_per_mtok is None
+
+
+def test_validation_metadata_defaults_to_unmeasured():
+    """An entry can be launch-validated without ever being benchmarked. That must read as absent."""
+    v = ValidationMetadata(
+        validated_at="2026-01-01",
+        validated_provider="mock",
+        validated_gpu="MOCK-GPU",
+        validated_image="img",
+        startup_timeout_seconds=300,
+    )
+    assert v.tokens_per_sec is None
+    assert v.tokens_per_sec_concurrent is None
+
+
+def test_real_catalog_throughput_is_plausible_where_recorded():
+    """Guards the pasted numbers against a decimal slip: concurrent must beat single stream, and
+    the measured concurrency must be recorded alongside it."""
+    for spec in load_catalog().list_models():
+        v = load_catalog().get_profile(spec.id).validation
+        if v.tokens_per_sec_concurrent is None:
+            continue
+        assert v.tokens_per_sec is not None
+        assert v.tokens_per_sec_concurrent > v.tokens_per_sec
+        assert v.measured_concurrency and v.measured_concurrency > 1
+
+
+def test_recorded_throughput_names_the_gpu_it_was_measured_on():
+    """qwen3-8b is launch-validated on an H100 but benchmarked on its recommended A40. Reusing
+    validated_gpu as the throughput's hardware stamp would attribute the number to a card it never
+    ran on, and estimate_cost gates on that stamp."""
+    for spec in load_catalog().list_models():
+        v = load_catalog().get_profile(spec.id).validation
+        if v.tokens_per_sec is None:
+            continue
+        assert v.throughput_gpu, f"{spec.id} records throughput without naming the GPU"
+        assert v.throughput_measured_at, f"{spec.id} records throughput without a date"
