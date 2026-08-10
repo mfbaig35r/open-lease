@@ -549,6 +549,23 @@ def estimate(
 
 
 @app.command()
+def plan(
+    model: str | None = typer.Argument(None, help="Catalog model id. Omit when using --hf-repo."),
+    hf_repo: str | None = typer.Option(None, "--hf-repo", help="Plan any HF repo instead."),
+    provider: str = typer.Option("runpod", "--provider"),
+    json_: bool = typer.Option(False, "--json"),
+) -> None:
+    """Rank the ways to run a model right now: fit, stock, price, cost per token. Reads only."""
+    if not model and not hf_repo:
+        _fail_msg("provide a catalog model id (see `gpu models`), or --hf-repo <repo>.")
+    options = _run(_orchestrator().plan_model(model, hf_repo=hf_repo, provider=provider))
+    if json_:
+        render.emit_json(options)
+        return
+    render.plan_table(hf_repo or model or "", options)
+
+
+@app.command()
 def availability(
     model: str | None = typer.Argument(None, help="Filter to a model's recommended GPU."),
     json_: bool = typer.Option(False, "--json"),

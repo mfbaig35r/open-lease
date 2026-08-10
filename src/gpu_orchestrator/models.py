@@ -617,6 +617,35 @@ class CostRecord(BaseModel):
         return round(self.gpu_hourly_usd * 24 * 30, 2)
 
 
+class PlanOption(BaseModel):
+    """One way to run a model, as ``gpu plan`` ranks them.
+
+    ``in_stock`` is three-valued on purpose: True, False, or None for "the provider did not say".
+    Collapsing None onto False would hide viable options whenever a provider has no availability
+    endpoint at all.
+
+    ``tokens_per_sec`` and therefore ``cost_per_mtok`` are present only for a GPU the model has
+    actually been benchmarked on. Projecting a measurement from one card onto another would make
+    the most decision-relevant column the least trustworthy one.
+    """
+
+    gpu_type: str
+    gpu_count: int = 1
+    fits: bool
+    in_stock: bool | None
+    hourly_usd: float
+    tokens_per_sec: float | None = None
+    recommended: bool = False
+    note: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_per_mtok(self) -> float | None:
+        if not self.tokens_per_sec:
+            return None
+        return round(self.hourly_usd / (self.tokens_per_sec * 3600) * 1_000_000, 2)
+
+
 class CostEstimate(BaseModel):
     """Returned by ``estimate_cost`` without deploying (spec §7.1, §15).
 

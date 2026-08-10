@@ -81,7 +81,14 @@ async def main() -> int:
             return 1
         url = deployment.endpoint_url
         served = deployment.hf_repo or args.model_id
-        print(f"READY at {url}; measuring...", flush=True)
+        # The GPU it ACTUALLY got, which is not always the one the profile recommends: an
+        # out-of-stock recommendation is substituted at create time. Read it here, while the
+        # instance still exists, because recording the recommendation instead would attribute the
+        # measurement to hardware it never ran on.
+        actual_gpu = deployment.instance.gpu_type if deployment.instance else gpu
+        if actual_gpu != gpu:
+            print(f"  note: substituted {gpu} -> {actual_gpu} (recommended GPU was out of stock)")
+        print(f"READY at {url} on {actual_gpu}; measuring...", flush=True)
 
         single = await _measure(url, served, concurrency=1, rounds=args.rounds)
         print(f"  single stream        {single:8.1f} tok/s", flush=True)
@@ -90,7 +97,7 @@ async def main() -> int:
 
         print("\n--- paste into the entry's [.profile.validation] block ---")
         print(f'throughput_measured_at = "{date.today().isoformat()}"')
-        print(f'throughput_gpu = "{gpu}"')  # not necessarily validated_gpu
+        print(f'throughput_gpu = "{actual_gpu}"')  # what it ran on, not what was recommended
         print(f"tokens_per_sec = {single}")
         print(f"tokens_per_sec_concurrent = {concurrent}")
         print(f"measured_concurrency = {args.concurrency}")

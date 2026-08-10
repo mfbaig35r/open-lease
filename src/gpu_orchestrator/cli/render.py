@@ -32,6 +32,7 @@ from ..models import (
     GpuAvailability,
     HealthStatus,
     ModelSpec,
+    PlanOption,
     ProviderInfo,
     UsageSummary,
     VolumeInfo,
@@ -442,3 +443,33 @@ def estimate_view(est: CostEstimate) -> None:
         f"[dim]cost/Mtok: [/dim]${est.cost_per_mtok:,.2f}"
         f"[dim] at {est.observed_tokens_per_sec:g} tok/s ({est.throughput_basis})[/dim]"
     )
+
+
+def plan_table(what: str, options: list[PlanOption]) -> None:
+    """The ranked ways to run a model.
+
+    Blank cost/Mtok cells are the honest state of an unbenchmarked GPU, not a rendering gap;
+    scripts/measure_throughput.py is what fills them in.
+    """
+    table = Table(title=f"How to run {escape(what)}")
+    for col in ("", "GPU", "FITS", "STOCK", "$/HR", "TOK/S", "$/MTOK", ""):
+        table.add_column(col)
+    for opt in options:
+        gpu = f"{opt.gpu_count}x {opt.gpu_type}" if opt.gpu_count > 1 else opt.gpu_type
+        stock = {True: "[green]yes[/]", False: "[red]no[/]", None: "[dim]?[/]"}[opt.in_stock]
+        table.add_row(
+            "[green]>[/]" if opt.recommended else "",
+            gpu,
+            "yes" if opt.fits else "[red]no[/]",
+            stock,
+            f"${opt.hourly_usd:.2f}",
+            f"{opt.tokens_per_sec:g}" if opt.tokens_per_sec else "[dim]-[/]",
+            f"${opt.cost_per_mtok:,.2f}" if opt.cost_per_mtok is not None else "[dim]-[/]",
+            f"[dim]{opt.note}[/]" if opt.note else "",
+        )
+    console.print(table)
+    if not any(o.cost_per_mtok is not None for o in options):
+        console.print(
+            "[dim]No cost/Mtok yet: this model has not been benchmarked on any of these GPUs. "
+            "Run scripts/measure_throughput.py to fill it in.[/dim]"
+        )
