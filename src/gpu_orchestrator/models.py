@@ -159,6 +159,38 @@ class ModelSpec(BaseModel):
     supports_reasoning: bool = False
 
 
+class ModelProfile(BaseModel):
+    """What a model IS, derived from Hugging Face metadata rather than curated by hand (issue #24).
+
+    The counterpart to ``ModelSpec``: a ModelSpec is written by a person and validated; a
+    ModelProfile is read from the hub at deploy time for a model nobody has curated. Every field is
+    optional because every field can be missing from a real repo, and a missing field must produce
+    "ask the user" rather than a confident wrong answer.
+
+    Sizes come from metadata only. Nothing here downloads weights.
+    """
+
+    hf_repo: str
+    architecture: str | None = None
+    weight_bytes: int | None = None
+    context_length: int | None = None
+    precision: str | None = None
+    quantization: str | None = None
+    num_layers: int | None = None
+    moe_experts: int | None = None
+    moe_experts_per_token: int | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_moe(self) -> bool:
+        return bool(self.moe_experts)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def weight_gb(self) -> float | None:
+        return round(self.weight_bytes / 1_000_000_000, 1) if self.weight_bytes else None
+
+
 class ValidationMetadata(BaseModel):
     """Proof a profile was actually launched. A profile without this does not ship (spec §14)."""
 

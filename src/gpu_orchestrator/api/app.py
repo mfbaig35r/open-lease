@@ -127,8 +127,8 @@ def create_app(
     @app.post("/deployments")
     async def deploy(body: DeployRequest) -> Deployment:
         if body.hf_repo:
-            if not body.gpu:
-                raise OrchestratorError("hf_repo requires a gpu (an ad-hoc model has no default)")
+            # gpu is optional: the orchestrator sizes the model from hub metadata when it is
+            # omitted, and raises with an actionable message if it cannot (issue #24).
             return await orchestrator.deploy_adhoc(
                 hf_repo=body.hf_repo,
                 gpu=body.gpu,

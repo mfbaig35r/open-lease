@@ -58,11 +58,19 @@ def test_deploy_adhoc_hf_repo(tmp_path):
     assert dep["observed_state"] == "ready"
 
 
-def test_deploy_adhoc_requires_gpu(tmp_path):
-    resp = _client(tmp_path).post(
-        "/deployments", json={"hf_repo": "Qwen/Qwen3-14B", "provider": "mock"}
+def test_deploy_adhoc_without_gpu_fails_clearly_when_the_model_cannot_be_sized(tmp_path):
+    """gpu is optional now (issue #24), but an unreadable model must say so rather than guess."""
+    cfg = Config(namespace="test", state_db=tmp_path / "api.db", reconcile_interval=0)
+    orch = Orchestrator(
+        cfg,
+        provider=MockProvider(namespace="test"),
+        runtime=_runtime(),
+        hf_transport=httpx.MockTransport(lambda r: httpx.Response(401)),  # gated repo
     )
-    assert resp.status_code == 400
+    resp = TestClient(create_app(orch)).post(
+        "/deployments", json={"hf_repo": "meta-llama/Llama-3.1-8B-Instruct", "provider": "mock"}
+    )
+    assert resp.status_code in (400, 404)
     assert "gpu" in resp.json()["error"]
 
 
