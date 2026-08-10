@@ -12,6 +12,8 @@ context_window = 32768
 license = "apache-2.0"
 chat = true
 supports_tools = true
+kv_bytes_per_token = 114688
+
 
 [models.qwen3-0-6b.profile]
 image = "vllm/vllm-openai:v0.9.1"
@@ -43,6 +45,8 @@ context_window = 131072
 license = "llama-3.1-community"
 chat = true
 supports_tools = true
+kv_bytes_per_token = 131072
+
 
 [models.llama-3-1-8b-instruct.profile]
 image = "vllm/vllm-openai:v0.9.1"
@@ -78,6 +82,8 @@ license = "apache-2.0"
 chat = true
 supports_tools = true
 supports_reasoning = true
+kv_bytes_per_token = 147456
+
 
 [models.qwen3-8b.profile]
 image = "vllm/vllm-openai:v0.9.1"
@@ -108,11 +114,16 @@ hf_repo = "Qwen/Qwen3-32B"
 family = "qwen3"
 parameter_count = "32B"
 min_gpu_memory_gb = 80
-context_window = 32768
+# 16384, not the model's architectural 40960. bf16 weights are 61 GiB of an 80GB card, leaving
+# ~4.5 GiB of KV cache; one 32768-token request needs 8.0 GiB, so vLLM refused to start at all.
+# Measured on an H100 2026-08-10; vLLM's own estimate of the ceiling was 18448 tokens.
+context_window = 16384
 license = "apache-2.0"
 chat = true
 supports_tools = true
 supports_reasoning = true
+kv_bytes_per_token = 262144
+
 
 [models.qwen3-32b.profile]
 image = "vllm/vllm-openai:v0.9.1"
@@ -122,15 +133,21 @@ recommended_gpu = "A100-80GB"
 min_disk_gb = 120
 
 [models.qwen3-32b.profile.validation]
-validated_at = "2026-07-05"
+validated_at = "2026-08-10"
 validated_provider = "runpod"
-validated_gpu = "A100-80GB"
+validated_gpu = "H100-80GB"
 validated_image = "vllm/vllm-openai:v0.9.1"
 startup_timeout_seconds = 2400
-notes = "Validated live on an A100 in EU-RO-1; ~17m cold time-to-ready (downloads ~65GB)."
+notes = """Re-validated 2026-08-10 after the previous entry proved unreproducible. The prior claim \
+(A100, 2026-07-05, 32768 context) cannot hold: bf16 weights load at 61.03 GiB, leaving 4.50 GiB of \
+KV cache, and one 32768-token request needs 8.00 GiB. vLLM exits 1 during engine init, RunPod \
+restarts the container in place, and the pod sits RUNNING with a dead port until the stage budget \
+trips. Verified on an H100 80GB by running vLLM 0.9.1 with these exact args: 32768 fails, 16384 \
+starts and serves. Weights load from local disk in 9s and the 65GB pull runs at ~290MB/s, so cold \
+start is dominated by neither. NOT throughput-benchmarked: at 16384 the KV cache holds 18448 \
+tokens, giving 1.13x concurrency, so this shape serves roughly one request at a time. An FP8 or \
+AWQ build would free ~30GB and is the right long-term entry; this one is honest, not good."""
 
-# Runtime #2. The GGUF build of Qwen3-0.6B, served by llama-server rather than vLLM. Small on
-# purpose: it is the entry that proves the llamacpp path end to end, not a recommended workhorse.
 [models.qwen3-0-6b-gguf]
 id = "qwen3-0.6b-gguf"
 hf_repo = "ggml-org/Qwen3-0.6B-GGUF"
