@@ -252,6 +252,16 @@ def create_server(orchestrator: Orchestrator) -> FastMCP:
         return [v.model_dump(mode="json") for v in await orchestrator.list_volumes()]
 
     @mcp.tool
+    async def plan_model(
+        model_id: str | None = None, hf_repo: str | None = None, provider: str = "runpod"
+    ) -> list[dict]:
+        """Rank the ways to run a model right now: which GPUs fit, which are in stock, hourly price,
+        and cost per million tokens. Reads only, no pods and no spend. cost_per_mtok is null for any
+        GPU the model has not been benchmarked on; it is never projected from another card."""
+        options = await orchestrator.plan_model(model_id, hf_repo=hf_repo, provider=provider)
+        return [o.model_dump(mode="json") for o in options]
+
+    @mcp.tool
     async def estimate_cost(
         model_id: str, provider: str = "runpod", hours: float = 1.0, gpu: str | None = None
     ) -> dict:

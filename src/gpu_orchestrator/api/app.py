@@ -43,6 +43,7 @@ from ..models import (
     GpuAvailability,
     HealthStatus,
     ModelSpec,
+    PlanOption,
     ProviderInfo,
     RuntimeOverrides,
     Schedule,
@@ -277,6 +278,12 @@ def create_app(
     @app.delete("/volumes/{volume_id}", status_code=204)
     async def delete_volume(volume_id: str) -> None:
         await orchestrator.delete_volume(volume_id)
+
+    @app.get("/plan")
+    async def plan_(
+        model_id: str | None = None, hf_repo: str | None = None, provider: str = "runpod"
+    ) -> list[PlanOption]:
+        return await orchestrator.plan_model(model_id, hf_repo=hf_repo, provider=provider)
 
     @app.post("/estimate")
     async def estimate(body: EstimateRequest) -> CostEstimate:

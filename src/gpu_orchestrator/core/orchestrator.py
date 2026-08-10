@@ -38,6 +38,7 @@ from ..models import (
     GPUType,
     HealthStatus,
     ModelSpec,
+    PlanOption,
     ProviderInfo,
     RuntimeOverrides,
     RuntimeProfile,
@@ -50,7 +51,7 @@ from ..models import (
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
-from . import autoscale, batch, budgets, health, modelinfo, usage
+from . import autoscale, batch, budgets, health, modelinfo, plan, usage
 from .catalog import Catalog, load_catalog
 from .reconciler import reconcile_once
 
@@ -513,6 +514,49 @@ class Orchestrator:
 
     async def delete_volume(self, volume_id: str, *, provider: str = "runpod") -> None:
         await self._provider(provider).delete_volume(volume_id)
+
+    async def plan_model(
+        self,
+        model_id: str | None = None,
+        *,
+        hf_repo: str | None = None,
+        provider: str = "runpod",
+    ) -> list[PlanOption]:
+        """Rank the ways to run a model right now: fit, stock, price, and cost per token.
+
+        Reads only. No pods, no spend. A catalog model is sized from its curated
+        ``min_gpu_memory_gb``; an ``hf_repo`` is sized from hub metadata, and falls back to showing
+        every GPU rather than nothing when the model cannot be sized (a gated repo should still get
+        you a price list)."""
+        required, validation = await self._plan_inputs(model_id, hf_repo)
+        prov = self._provider(provider)
+        caps = await prov.capabilities()
+        try:
+            rows = await prov.gpu_availability()
+        except OrchestratorError:
+            rows = []  # no availability API is not the same as nothing available
+        return plan.build_options(
+            required_vram_gb=required,
+            gpu_types=caps.gpu_types,
+            available_skus={r.gpu_type_id for r in rows if r.available},
+            validation=validation,
+        )
+
+    async def _plan_inputs(
+        self, model_id: str | None, hf_repo: str | None
+    ) -> tuple[float | None, ValidationMetadata | None]:
+        """Required VRAM and any benchmark for the thing being planned."""
+        if hf_repo:
+            profile = await modelinfo.fetch_profile(
+                hf_repo,
+                token=self._config.hf_token.get_secret_value() if self._config.hf_token else None,
+                transport=self._hf_transport,
+            )
+            return (modelinfo.required_vram_gb(profile) if profile else None), None
+        if not model_id:
+            raise ModelNotFoundError("provide a catalog model id or an hf_repo to plan")
+        spec = self._catalog.get_spec(model_id)
+        return float(spec.min_gpu_memory_gb) or None, self._catalog.get_profile(model_id).validation
 
     async def estimate_cost(
         self,
