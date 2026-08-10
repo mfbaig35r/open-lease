@@ -192,7 +192,17 @@ class ModelProfile(BaseModel):
 
 
 class ValidationMetadata(BaseModel):
-    """Proof a profile was actually launched. A profile without this does not ship (spec §14)."""
+    """Proof a profile was actually launched. A profile without this does not ship (spec §14).
+
+    The throughput fields extend that proof from "it starts" to "it runs this fast", which is what
+    lets ``estimate_cost`` answer in cost per million tokens on a fresh install instead of only
+    after someone has already served traffic. They are measured by the same validation run that
+    sets ``validated_at``, on ``validated_gpu``, by ``scripts/measure_throughput.py``.
+
+    Optional, and absent by default: a catalog entry may be launch-validated without ever having
+    been benchmarked, and an unmeasured entry must report no throughput rather than a plausible
+    number. Both figures are output tokens per second for the whole deployment.
+    """
 
     validated_at: str  # ISO date, e.g. "2026-07-03"
     validated_provider: str
@@ -200,6 +210,18 @@ class ValidationMetadata(BaseModel):
     validated_image: str
     startup_timeout_seconds: int  # overrides the default download-stage budget (§7.3)
     notes: str = ""
+    # Dated AND hardware-stamped separately from the launch validation: an entry is often
+    # launch-validated on one GPU long before anyone benchmarks it on another (qwen3-8b was
+    # validated on an H100 and benchmarked on its recommended A40). Reusing validated_gpu here
+    # would attribute a measurement to hardware it never ran on.
+    throughput_measured_at: str | None = None
+    throughput_gpu: str | None = None
+    # Single-stream decode: what one user feels. The interactive-latency number.
+    tokens_per_sec: float | None = None
+    # Aggregate decode under load, with the concurrency it was measured at. These differ by an order
+    # of magnitude on real hardware, so a single "throughput" figure would be a lie either way.
+    tokens_per_sec_concurrent: float | None = None
+    measured_concurrency: int | None = None
 
 
 class RuntimeProfile(BaseModel):

@@ -524,6 +524,10 @@ class Orchestrator:
         tokens. Per-token is filled in only from throughput this install has actually measured for
         this model on this GPU, and is left absent otherwise (issue #25).
 
+        Throughput precedence: this install's own traffic first, because that reflects the real
+        workload; then the catalog baseline measured when the profile was validated, so a fresh
+        install gets an answer before it has served anything; then nothing.
+
         Works for ad-hoc models with no catalog entry: an explicit ``gpu`` wins, then the catalog,
         then the GPU a previous deployment of this model used."""
         wanted = gpu or self._estimate_gpu(model_id)
@@ -531,7 +535,7 @@ class Orchestrator:
         matched = _match_gpu(caps.gpu_types, wanted)
         observed = usage.observed_throughput(
             self._store, model_id, gpu_names={matched.id, matched.provider_sku, wanted}
-        )
+        ) or self._catalog_throughput(model_id, matched)
         return CostEstimate(
             model_id=model_id,
             provider=provider,
@@ -542,6 +546,35 @@ class Orchestrator:
             observed_tokens_per_sec=observed[0] if observed else None,
             throughput_basis=observed[1] if observed else None,
         )
+
+    def _catalog_throughput(self, model_id: str, gpu: GPUType) -> tuple[float, str] | None:
+        """The throughput recorded when this profile was validated, if it was measured on this GPU.
+
+        Prefers the concurrent figure because it is semantically the same quantity the local-usage
+        path reports (aggregate tokens over rented time); the single-stream figure is a different
+        question and says so in its provenance. Refuses to reuse a measurement from other hardware,
+        for the same reason the local path does.
+        """
+        try:
+            validation = self._catalog.get_profile(model_id).validation
+        except ModelNotFoundError:
+            return None
+        # The GPU the THROUGHPUT was measured on, which is not always the one the launch was
+        # validated on. Falling back to validated_gpu keeps older entries working.
+        measured_gpu = validation.throughput_gpu or validation.validated_gpu
+        if measured_gpu not in (gpu.id, gpu.provider_sku):
+            return None
+        when = validation.throughput_measured_at or validation.validated_at
+        stamp = f"measured {when} on {measured_gpu}"
+        if validation.tokens_per_sec_concurrent:
+            at = validation.measured_concurrency
+            return (
+                validation.tokens_per_sec_concurrent,
+                f"catalog baseline at concurrency {at}, {stamp}",
+            )
+        if validation.tokens_per_sec:
+            return validation.tokens_per_sec, f"catalog baseline, single stream, {stamp}"
+        return None
 
     def _estimate_gpu(self, model_id: str) -> str:
         """The GPU to price ``model_id`` on: catalog first, then this install's own history so an

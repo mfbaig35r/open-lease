@@ -68,6 +68,13 @@ QWEN3_06B_PROFILE = RuntimeProfile(
         validated_image="vllm/vllm-openai:v0.9.1",
         startup_timeout_seconds=600,
         notes="Smallest catalog model; used for the integration gauntlet.",
+        # Measured live on RunPod 2026-08-09 by scripts/measure_throughput.py, so the fixture
+        # exercises the catalog-baseline path with real numbers rather than invented ones.
+        throughput_measured_at="2026-08-09",
+        throughput_gpu="RTX-A4000",
+        tokens_per_sec=127.4,
+        tokens_per_sec_concurrent=1553.2,
+        measured_concurrency=16,
     ),
 )
 
