@@ -7,6 +7,12 @@ fast", which is what lets ``gpu estimate`` report cost per million tokens on a f
     uv run python scripts/measure_throughput.py qwen3-0.6b
     uv run python scripts/measure_throughput.py qwen3-8b --concurrency 16 --provider runpod
 
+Needs a daemon (`gpu daemon --detach`). It deploys NON-blocking and polls, because the daemon owns
+the reconcile loop: driving reconcile_once inline here while a daemon ticks the same deployment
+would be two reconcilers on one record, and the per-deployment lock is single-process-only in
+Phase 1 (CLAUDE.md). Running a daemon is also what makes tick_sweep reap the pod if this script
+dies mid-run.
+
 It deploys, waits for READY, drives two load patterns, prints a TOML block, and tears the pod down
 in a finally. Two numbers, not one: single-stream decode is what a user feels, aggregate decode
 under load is what a batch workload gets, and on real hardware they differ by an order of magnitude
@@ -60,12 +66,33 @@ async def _measure(url: str, model: str, *, concurrency: int, rounds: int) -> fl
         return round(tokens / (time.perf_counter() - start), 1)
 
 
+async def _await_ready(orch: Orchestrator, deployment_id: str, timeout: int):
+    """Poll the store while the daemon reconciles. Prints stage changes so a long cold start is
+    visibly progressing rather than looking hung."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        deployment = orch.get_deployment(deployment_id)
+        state = deployment.observed_state
+        if state is not last:
+            pct = deployment.download_progress
+            extra = f" ({int(pct * 100)}%)" if pct is not None else ""
+            print(f"  {state.value}{extra}", flush=True)
+            last = state
+        if state in (DeploymentState.READY, DeploymentState.FAILED):
+            return deployment
+        await asyncio.sleep(10)
+    print(f"  gave up waiting after {timeout}s")
+    return orch.get_deployment(deployment_id)
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("model_id", help="Catalog model id, e.g. qwen3-0.6b")
     ap.add_argument("--provider", default="runpod")
     ap.add_argument("--concurrency", type=int, default=16)
     ap.add_argument("--rounds", type=int, default=2)
+    ap.add_argument("--timeout", type=int, default=3000, help="Seconds to wait for READY.")
     args = ap.parse_args()
 
     orch = Orchestrator(Config())
@@ -75,9 +102,12 @@ async def main() -> int:
 
     deployment = None
     try:
-        deployment = await orch.deploy_model(args.model_id, provider=args.provider, wait=True)
+        deployment = await orch.deploy_model(args.model_id, provider=args.provider, wait=False)
+        deployment = await _await_ready(orch, deployment.id, args.timeout)
         if deployment.observed_state is not DeploymentState.READY:
             print(f"FAILED to reach READY: {deployment.observed_state.value}")
+            if deployment.failure:
+                print(f"  {deployment.failure.message[:200]}")
             return 1
         url = deployment.endpoint_url
         served = deployment.hf_repo or args.model_id
@@ -85,7 +115,13 @@ async def main() -> int:
         # out-of-stock recommendation is substituted at create time. Read it here, while the
         # instance still exists, because recording the recommendation instead would attribute the
         # measurement to hardware it never ran on.
-        actual_gpu = deployment.instance.gpu_type if deployment.instance else gpu
+        # instance.gpu_type is the PROVIDER SKU ("NVIDIA H100 80GB HBM3"); the catalog is written
+        # in catalog ids ("H100-80GB"). Both match at lookup time, but keep the file consistent.
+        raw = deployment.instance.gpu_type if deployment.instance else ""
+        caps = await orch._provider(args.provider).capabilities()
+        actual_gpu = next(
+            (g.id for g in caps.gpu_types if raw in (g.id, g.provider_sku)), raw or gpu
+        )
         if actual_gpu != gpu:
             print(f"  note: substituted {gpu} -> {actual_gpu} (recommended GPU was out of stock)")
         print(f"READY at {url} on {actual_gpu}; measuring...", flush=True)
