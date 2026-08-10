@@ -148,7 +148,10 @@ def deploy(
     context: int | None = typer.Option(
         None, "--context", help="Ad-hoc: max model length; default lets vLLM auto-detect."
     ),
-    image: str | None = typer.Option(None, "--image", help="Ad-hoc: vLLM image."),
+    image: str | None = typer.Option(None, "--image", help="Ad-hoc: serving image."),
+    runtime: str = typer.Option(
+        "vllm", "--runtime", help="Ad-hoc: serving engine (vllm, llamacpp)."
+    ),
     disk: int | None = typer.Option(None, "--disk", help="Ad-hoc: container disk GB."),
     gpus: int = typer.Option(
         1, "--gpus", help="Ad-hoc: GPUs per pod for tensor parallelism (a big model needs >1)."
@@ -181,6 +184,7 @@ def deploy(
                 image=image,
                 disk_gb=disk,
                 gpu_count=gpus,
+                runtime=runtime,
                 wait=wait,
                 overrides=_overrides(set_),
             )

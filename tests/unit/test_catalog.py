@@ -6,6 +6,7 @@ import pytest
 
 from gpu_orchestrator.core.catalog import load_catalog
 from gpu_orchestrator.errors import InvalidProfileError, ModelNotFoundError
+from gpu_orchestrator.runtimes import RUNTIMES
 
 _GOOD_ENTRY = """
 [models.tiny]
@@ -32,9 +33,20 @@ startup_timeout_seconds = 300
 
 
 def test_real_catalog_loads_models():
+    """Asserts invariants, not an exact id list. The build order calls for growing this to 10-15
+    entries, and a hardcoded set turns every addition into a test failure that teaches nothing."""
     catalog = load_catalog()
     ids = {m.id for m in catalog.list_models()}
-    assert ids == {"qwen3-0.6b", "llama-3.1-8b-instruct", "qwen3-8b", "qwen3-32b"}
+    assert {"qwen3-0.6b", "qwen3-32b"} <= ids  # the two the live gauntlet ran against
+    assert len(ids) == len(catalog.list_models())  # ids are unique
+
+
+def test_every_profile_names_a_registered_runtime():
+    """A profile can ask for any engine; an unregistered one would fail at deploy time on a real
+    pod instead of at load time here."""
+    catalog = load_catalog()
+    for spec in catalog.list_models():
+        assert catalog.get_profile(spec.id).runtime in RUNTIMES
 
 
 def test_every_profile_carries_validation_metadata():

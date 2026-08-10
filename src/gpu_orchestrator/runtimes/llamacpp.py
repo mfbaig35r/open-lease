@@ -25,9 +25,8 @@ from .base import Runtime
 
 _LLAMA_PORT = 8080  # llama-server's default
 
-# The server image ships the binary at /app/llama-server. Not yet proven against a live pod: no
-# catalog entry can ship until ValidationMetadata says someone launched it (spec §14), which is
-# exactly the gate that keeps an unvalidated path from being presented as a supported one.
+# Validated live on RunPod 2026-08-09: this entrypoint, these flags, an RTX A4000 pod reaching
+# READY in ~2 minutes and answering /v1/chat/completions through the proxy.
 _ENTRYPOINT = ["/app/llama-server"]
 
 # llama.cpp download lines carry a percentage much like the HF hub's. Same shape, same parse.
@@ -112,8 +111,10 @@ class LlamaCppRuntime(Runtime):
             if resp.status_code != 200:
                 return CheckResult(ok=False, latency_ms=latency, detail=f"HTTP {resp.status_code}")
             served = {m.get("id") for m in resp.json().get("data", []) if m.get("id")}
-            # Same reasoning as vLLM: llama-server reports the GGUF's own name, not our catalog id,
-            # and we launch one model per pod, so any served model means ready.
+            # Same reasoning as vLLM, and confirmed by the live run: llama-server reported
+            # "ggml-org/Qwen3-0.6B-GGUF" while our catalog id was "qwen3-0.6b-gguf". Matching on the
+            # catalog id would never pass, and we launch one model per pod, so any served model is
+            # the readiness signal.
             ok = model_id in served or bool(served)
             detail = f"serving {sorted(served)}" if ok else "no model loaded yet"
             return CheckResult(ok=ok, latency_ms=latency, detail=detail)
