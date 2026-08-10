@@ -113,3 +113,31 @@ validated_gpu = "A100-80GB"
 validated_image = "vllm/vllm-openai:v0.9.1"
 startup_timeout_seconds = 2400
 notes = "Validated live on an A100 in EU-RO-1; ~17m cold time-to-ready (downloads ~65GB)."
+
+# Runtime #2. The GGUF build of Qwen3-0.6B, served by llama-server rather than vLLM. Small on
+# purpose: it is the entry that proves the llamacpp path end to end, not a recommended workhorse.
+[models.qwen3-0-6b-gguf]
+id = "qwen3-0.6b-gguf"
+hf_repo = "ggml-org/Qwen3-0.6B-GGUF"
+family = "qwen3"
+parameter_count = "0.6B"
+quantization = "gguf"
+min_gpu_memory_gb = 8
+context_window = 4096
+license = "apache-2.0"
+chat = true
+
+[models.qwen3-0-6b-gguf.profile]
+runtime = "llamacpp"
+image = "ghcr.io/ggml-org/llama.cpp:server-cuda"
+tensor_parallel = 1
+recommended_gpu = "RTX-A4000"
+min_disk_gb = 30
+
+[models.qwen3-0-6b-gguf.profile.validation]
+validated_at = "2026-08-09"
+validated_provider = "runpod"
+validated_gpu = "RTX-A4000"
+validated_image = "ghcr.io/ggml-org/llama.cpp:server-cuda"
+startup_timeout_seconds = 900
+notes = "Validated live on RunPod: create -> /health 200 -> /v1/models -> chat completion -> destroy. ~2 min to READY. RunPod returns no logs, so download_progress is unavailable (same as vLLM)."

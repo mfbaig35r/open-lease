@@ -183,6 +183,14 @@ class RuntimeProfile(BaseModel):
     min_disk_gb: int
     env: dict[str, str] = Field(default_factory=dict)
     validation: ValidationMetadata
+    # Layers whose MoE experts are held in host RAM and computed on the CPU (llama.cpp --n-cpu-moe).
+    # 0 = fully resident, the normal case.
+    #
+    # NOT a general serving mode. Measured on rented hardware (docs/adr-adaptive-execution-planning
+    # .md): decode holds 15% of resident throughput at batch 1 and 8.5% at concurrency 16, and cost
+    # per token is 3.2x to 22x worse. It wins only on cost per HOUR (4.2x), so it is for a
+    # single-stream, low-duty-cycle endpoint on a model that would otherwise need a bigger machine.
+    cpu_moe_offload: int = 0
 
 
 class RuntimeOverrides(BaseModel):

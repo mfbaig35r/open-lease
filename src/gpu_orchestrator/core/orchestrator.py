@@ -67,6 +67,12 @@ _TERMINAL_STOP = {DeploymentState.STOPPED, DeploymentState.FAILED}
 # `latest`. Old pins silently fail to load newer model architectures, so keep this current; override
 # per deploy with `--image` when a model needs a different (or nightly) build.
 _ADHOC_IMAGE = "vllm/vllm-openai:v0.25.1"
+# Per-runtime default image for an ad-hoc deploy. Without this, picking a runtime would also mean
+# hand-passing its image, and llamacpp would stay unreachable outside a curated catalog entry.
+_ADHOC_IMAGES = {
+    "vllm": _ADHOC_IMAGE,
+    "llamacpp": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+}
 _ADHOC_DISK_GB = 60
 _ADHOC_STARTUP_SECONDS = 1800  # generous: an unknown model may be large / slow to download
 
@@ -129,6 +135,7 @@ class Orchestrator:
         image: str | None = None,
         disk_gb: int | None = None,
         gpu_count: int = 1,
+        runtime: str = "vllm",
         wait: bool = False,
         overrides: RuntimeOverrides | None = None,
     ) -> Deployment:
@@ -137,9 +144,12 @@ class Orchestrator:
         on); ``context_window`` 0 lets vLLM auto-detect. ``gpu_count`` > 1 provisions a multi-GPU
         pod and shards vLLM across it (tensor parallelism). The deployment carries its own hf_repo,
         so reconcile and the proxy need no catalog lookup."""
-        img = image or _ADHOC_IMAGE
+        if runtime not in RUNTIMES:
+            raise ReconcileError(f"unknown runtime {runtime!r} (have: {sorted(RUNTIMES)})")
+        img = image or _ADHOC_IMAGES.get(runtime, _ADHOC_IMAGE)
         profile = RuntimeProfile(
             model_id=_adhoc_model_id(hf_repo),
+            runtime=runtime,
             image=img,
             recommended_gpu=gpu,
             tensor_parallel=gpu_count,
@@ -446,7 +456,7 @@ class Orchestrator:
     async def get_health(self, deployment_id: str) -> HealthStatus:
         deployment = self._store.get_deployment(deployment_id)
         return await health.run_checks(
-            deployment, self._provider(deployment.provider), self._runtime()
+            deployment, self._provider(deployment.provider), self._runtime(deployment)
         )
 
     async def get_logs(
@@ -543,7 +553,7 @@ class Orchestrator:
         hammering the API; tests set the interval to 0. The daemon owns the loop for non-blocking
         deploys -- this is the caller-blocks path."""
         provider = self._provider(deployment.provider)
-        runtime = self._runtime()
+        runtime = self._runtime(deployment)
         for _ in range(_MAX_DRIVE_TICKS):
             if deployment.observed_state in until:
                 return deployment
@@ -568,8 +578,10 @@ class Orchestrator:
     def _provider(self, name: str) -> Provider:
         return self._injected_provider or build_provider(self._config, name)
 
-    def _runtime(self, name: str = "vllm") -> Runtime:
-        return self._injected_runtime or build_runtime(name)
+    def _runtime(self, deployment: Deployment) -> Runtime:
+        """The engine this deployment's profile asks for (spec §9). ``profile.runtime`` was inert
+        while vLLM was the only implementation; honoring it is what makes runtime #2 reachable."""
+        return self._injected_runtime or build_runtime(deployment.profile.runtime)
 
     def _emit(self, deployment: Deployment, kind: EventKind, payload: dict) -> None:
         self._events.emit(

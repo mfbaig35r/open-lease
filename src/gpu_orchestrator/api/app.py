@@ -60,8 +60,9 @@ class DeployRequest(BaseModel):
     provider: str = "runpod"
     gpu: str | None = None
     context: int | None = None  # ad-hoc: max model length; omit to let vLLM auto-detect
-    image: str | None = None  # ad-hoc: vLLM image
+    image: str | None = None  # ad-hoc: serving image; defaults per runtime
     disk: int | None = None  # ad-hoc: container disk GB
+    runtime: str = "vllm"  # ad-hoc: serving engine (vllm, llamacpp)
     wait: bool = False
     overrides: RuntimeOverrides | None = None
 
@@ -135,6 +136,7 @@ def create_app(
                 context_window=body.context or 0,
                 image=body.image,
                 disk_gb=body.disk,
+                runtime=body.runtime,
                 wait=body.wait,
                 overrides=body.overrides,
             )

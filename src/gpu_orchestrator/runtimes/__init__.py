@@ -7,6 +7,7 @@ so ``RUNTIMES`` (built in ``base``) is safe regardless of which submodule a call
 from __future__ import annotations
 
 from .base import RUNTIMES, Runtime
+from .llamacpp import LlamaCppRuntime
 from .vllm import VLLMRuntime
 
-__all__ = ["RUNTIMES", "Runtime", "VLLMRuntime"]
+__all__ = ["RUNTIMES", "LlamaCppRuntime", "Runtime", "VLLMRuntime"]
