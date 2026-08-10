@@ -132,6 +132,7 @@ class EventKind(StrEnum):
     BUDGET_EXCEEDED = "budget_exceeded"
     BUDGET_RELEASED = "budget_released"
     AUTOSCALED = "autoscaled"
+    GPU_SUBSTITUTED = "gpu_substituted"
 
 
 # =====================================================================================
@@ -237,6 +238,10 @@ class RuntimeProfile(BaseModel):
     min_disk_gb: int
     env: dict[str, str] = Field(default_factory=dict)
     validation: ValidationMetadata
+    # True when a human named the GPU. A recommendation may be substituted when it is out of stock;
+    # an explicit choice may not, because silently running somewhere else is not a smaller surprise
+    # than failing.
+    gpu_pinned: bool = False
     # Layers whose MoE experts are held in host RAM and computed on the CPU (llama.cpp --n-cpu-moe).
     # 0 = fully resident, the normal case.
     #
