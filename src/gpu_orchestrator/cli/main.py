@@ -139,11 +139,11 @@ def _overrides(sets: list[str] | None) -> RuntimeOverrides | None:
 def deploy(
     model: str | None = typer.Argument(None, help="Catalog model id. Omit when using --hf-repo."),
     hf_repo: str | None = typer.Option(
-        None, "--hf-repo", help="Deploy any HF repo with no catalog entry (needs --gpu)."
+        None, "--hf-repo", help="Deploy any HF repo with no catalog entry."
     ),
     provider: str = typer.Option("runpod", "--provider"),
     gpu: str | None = typer.Option(
-        None, "--gpu", help="Override the recommended GPU (required with --hf-repo)."
+        None, "--gpu", help="Override the GPU. Ad-hoc deploys size themselves when omitted."
     ),
     context: int | None = typer.Option(
         None, "--context", help="Ad-hoc: max model length; default lets vLLM auto-detect."
@@ -153,8 +153,8 @@ def deploy(
         "vllm", "--runtime", help="Ad-hoc: serving engine (vllm, llamacpp)."
     ),
     disk: int | None = typer.Option(None, "--disk", help="Ad-hoc: container disk GB."),
-    gpus: int = typer.Option(
-        1, "--gpus", help="Ad-hoc: GPUs per pod for tensor parallelism (a big model needs >1)."
+    gpus: int | None = typer.Option(
+        None, "--gpus", help="Ad-hoc: GPUs per pod. Sized from the model's metadata when omitted."
     ),
     replicas: int = typer.Option(
         1, "--replicas", help="Deploy N load-balanced replicas of the model (Tier B)."
@@ -168,10 +168,8 @@ def deploy(
     the catalog only holds tuned, validated recipes. Returns immediately unless --wait/--chat."""
     orch = _orchestrator()
     wait = wait or chat  # can't chat until it is READY
-    if hf_repo and not gpu:
-        _fail_msg("--hf-repo requires --gpu (an ad-hoc model has no recommended GPU).")
     if not hf_repo and not model:
-        _fail_msg("provide a catalog model id (see `gpu models`), or --hf-repo <repo> --gpu <gpu>.")
+        _fail_msg("provide a catalog model id (see `gpu models`), or --hf-repo <repo>.")
 
     if hf_repo:
         _preflight_capacity(orch, hf_repo, provider, gpu)

@@ -17,6 +17,8 @@ from collections.abc import Callable, Iterator
 from datetime import datetime
 from uuid import uuid4
 
+import httpx
+
 from ..config import Config
 from ..errors import BudgetExceededError, ModelNotFoundError, OrchestratorError, ReconcileError
 from ..events import EventLog
@@ -48,7 +50,7 @@ from ..models import (
 from ..providers.base import PROVIDERS, Provider
 from ..runtimes.base import RUNTIMES, Runtime
 from ..store import Store
-from . import autoscale, batch, budgets, health, usage
+from . import autoscale, batch, budgets, health, modelinfo, usage
 from .catalog import Catalog, load_catalog
 from .reconciler import reconcile_once
 
@@ -85,6 +87,7 @@ class Orchestrator:
         catalog: Catalog | None = None,
         provider: Provider | None = None,
         runtime: Runtime | None = None,
+        hf_transport: httpx.BaseTransport | None = None,
     ) -> None:
         # ``provider``/``runtime`` injection is the seam tests use to run against the mock provider
         # without touching config or the network; production leaves them None and builds by name.
@@ -94,6 +97,8 @@ class Orchestrator:
         self._catalog = catalog or load_catalog()
         self._injected_provider = provider
         self._injected_runtime = runtime
+        # Same seam as provider/runtime: lets tests size a model without touching the hub.
+        self._hf_transport = hf_transport
 
     @property
     def config(self) -> Config:
@@ -129,23 +134,31 @@ class Orchestrator:
         self,
         *,
         hf_repo: str,
-        gpu: str,
+        gpu: str | None = None,
         provider: str = "runpod",
         context_window: int = 0,
         image: str | None = None,
         disk_gb: int | None = None,
-        gpu_count: int = 1,
+        gpu_count: int | None = None,
         runtime: str = "vllm",
         wait: bool = False,
         overrides: RuntimeOverrides | None = None,
     ) -> Deployment:
         """Deploy any vLLM-servable HF repo with no catalog entry. The engine is model-neutral; the
-        catalog only supplies tuned recipes. ``--gpu`` is required (no recommended GPU to fall back
-        on); ``context_window`` 0 lets vLLM auto-detect. ``gpu_count`` > 1 provisions a multi-GPU
-        pod and shards vLLM across it (tensor parallelism). The deployment carries its own hf_repo,
-        so reconcile and the proxy need no catalog lookup."""
+        catalog only supplies tuned recipes. ``context_window`` 0 lets the engine auto-detect. The
+        deployment carries its own hf_repo, so reconcile and the proxy need no catalog lookup.
+
+        ``gpu`` is optional (issue #24): when omitted, the model's size is read from its Hugging
+        Face metadata and the cheapest sufficient GPU is chosen, including a multi-GPU pod when no
+        single card fits. An explicit ``gpu`` always wins, and an unreadable model raises rather
+        than guessing. ``runtime`` picks the serving engine (issue #23); its default image follows
+        from that choice."""
         if runtime not in RUNTIMES:
             raise ReconcileError(f"unknown runtime {runtime!r} (have: {sorted(RUNTIMES)})")
+        if gpu is None:
+            gpu, sized_count = await self._size_from_hub(hf_repo, provider)
+            gpu_count = gpu_count or sized_count
+        gpu_count = gpu_count or 1
         img = image or _ADHOC_IMAGES.get(runtime, _ADHOC_IMAGE)
         profile = RuntimeProfile(
             model_id=_adhoc_model_id(hf_repo),
@@ -574,6 +587,39 @@ class Orchestrator:
             f"deployment {deployment.id} did not settle within {_MAX_DRIVE_TICKS} ticks "
             f"(observed={deployment.observed_state.value})"
         )
+
+    async def _size_from_hub(self, hf_repo: str, provider: str) -> tuple[str, int]:
+        """Pick a GPU (and count) for an uncurated model from its hub metadata.
+
+        Raises with an actionable message when the model cannot be sized, rather than defaulting
+        to some GPU: an under-sized guess OOMs minutes into a paid cold start, and an over-sized one
+        silently overcharges. Neither is a good trade against one explicit flag."""
+        token = self._config.hf_token.get_secret_value() if self._config.hf_token else None
+        profile = await modelinfo.fetch_profile(hf_repo, token=token, transport=self._hf_transport)
+        if profile is None:
+            raise ModelNotFoundError(
+                f"Could not read metadata for {hf_repo!r} (gated, missing, or unreadable). "
+                "Pass an explicit gpu."
+            )
+        caps = await self._provider(provider).capabilities()
+        chosen = modelinfo.select_gpu(profile, caps.gpu_types)
+        if chosen is None:
+            needed = modelinfo.required_vram_gb(profile)
+            detail = f"needs ~{needed} GB" if needed else "has no published weight size"
+            raise ModelNotFoundError(
+                f"No GPU on {provider} fits {hf_repo!r} ({detail}). Pass an explicit gpu."
+            )
+        gpu, count = chosen
+        _log.info(
+            "sized model from hub metadata",
+            extra={
+                "hf_repo": hf_repo,
+                "weight_gb": profile.weight_gb,
+                "gpu": gpu.id,
+                "gpu_count": count,
+            },
+        )
+        return gpu.id, count
 
     def _provider(self, name: str) -> Provider:
         return self._injected_provider or build_provider(self._config, name)

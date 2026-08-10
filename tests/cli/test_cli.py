@@ -53,11 +53,12 @@ def test_deploy_wait_reaches_ready(cli):
     assert "ready" in result.output
 
 
-def test_deploy_hf_repo_requires_gpu(cli):
+def test_deploy_hf_repo_no_longer_requires_gpu_up_front(cli):
+    """The old guard rejected --hf-repo without --gpu before any work happened. That guard is gone
+    (issue #24); sizing is the orchestrator's job now, so the CLI must not pre-empt it."""
     runner, _ = cli
     result = runner.invoke(app, ["deploy", "--hf-repo", "Qwen/Qwen3-14B", "--provider", "mock"])
-    assert result.exit_code != 0
-    assert "--gpu" in result.output
+    assert "requires --gpu" not in result.output
 
 
 def test_deploy_adhoc_hf_repo_reaches_ready(cli):
