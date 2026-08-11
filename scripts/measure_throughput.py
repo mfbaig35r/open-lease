@@ -88,7 +88,11 @@ async def _await_ready(orch: Orchestrator, deployment_id: str, timeout: int):
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("model_id", help="Catalog model id, e.g. qwen3-0.6b")
+    ap.add_argument("model_id", nargs="?", help="Catalog model id, e.g. qwen3-0.6b")
+    ap.add_argument("--hf-repo", help="Measure an uncatalogued repo instead of a catalog id.")
+    ap.add_argument("--gpu", help="Ad-hoc: GPU to run on.")
+    ap.add_argument("--gpus", type=int, default=1, help="Ad-hoc: GPUs per pod (tensor parallel).")
+    ap.add_argument("--context", type=int, default=0, help="Ad-hoc: max model length.")
     ap.add_argument("--provider", default="runpod")
     ap.add_argument("--concurrency", type=int, default=16)
     ap.add_argument("--rounds", type=int, default=2)
@@ -96,13 +100,28 @@ async def main() -> int:
     args = ap.parse_args()
 
     orch = Orchestrator(Config())
-    profile = orch._catalog.get_profile(args.model_id)
-    gpu = profile.recommended_gpu
-    print(f"deploying {args.model_id} on {gpu} ({args.provider})...", flush=True)
+    if args.hf_repo:
+        gpu, label = args.gpu, args.hf_repo
+    else:
+        gpu, label = orch._catalog.get_profile(args.model_id).recommended_gpu, args.model_id
+    shape = f"{args.gpus}x {gpu}" if args.gpus > 1 else gpu
+    print(f"deploying {label} on {shape} ({args.provider})...", flush=True)
 
     deployment = None
     try:
-        deployment = await orch.deploy_model(args.model_id, provider=args.provider, wait=False)
+        if args.hf_repo:
+            # Measure BEFORE cataloguing: a profile only earns a catalog entry once someone has
+            # actually launched it (spec §14), so the ad-hoc path is how a candidate is tried.
+            deployment = await orch.deploy_adhoc(
+                hf_repo=args.hf_repo,
+                gpu=args.gpu,
+                gpu_count=args.gpus,
+                context_window=args.context,
+                provider=args.provider,
+                wait=False,
+            )
+        else:
+            deployment = await orch.deploy_model(args.model_id, provider=args.provider, wait=False)
         deployment = await _await_ready(orch, deployment.id, args.timeout)
         if deployment.observed_state is not DeploymentState.READY:
             print(f"FAILED to reach READY: {deployment.observed_state.value}")

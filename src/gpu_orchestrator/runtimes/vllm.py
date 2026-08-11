@@ -57,6 +57,19 @@ class VLLMRuntime(Runtime):
         for flag, value in args.items():
             command += [flag, value]
 
+        env = dict(profile.env)
+        if profile.tensor_parallel > 1:
+            # NCCL peer-to-peer HANGS on cloud pods whose GPUs sit behind a PCIe switch with no
+            # NVLink, which is the normal RunPod multi-GPU shape. Measured 2026-08-11 on a 2x A40
+            # pod: a plain all-reduce never returns, and the same call with this set completes in
+            # 0.385s at 13 GB/s. vLLM inherits the hang, so a TP>1 deploy sits in starting_server
+            # until its stage budget trips, with no log to say why.
+            #
+            # torch.cuda.can_device_access_peer() reports True on those pods, so the capability
+            # check cannot be trusted to decide this. Default it on for safety and let a profile
+            # override it via env: a hang is worse than losing P2P, and on a real NVLink machine
+            # the profile can drop it.
+            env.setdefault("NCCL_P2P_DISABLE", "1")
         return InstanceRequest(
             name=name,
             gpu_type=gpu.provider_sku,
@@ -64,7 +77,7 @@ class VLLMRuntime(Runtime):
             # that many. They must match.
             gpu_count=profile.tensor_parallel,
             image=profile.image,
-            env=dict(profile.env),
+            env=env,
             disk_gb=profile.min_disk_gb,
             ports=[_VLLM_PORT],
             command=command,
