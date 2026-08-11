@@ -151,6 +151,11 @@ class ModelSpec(BaseModel):
     min_gpu_memory_gb: int
     context_window: int
     license: str
+    # Bytes of KV cache one token costs: 2 (K and V) * layers * kv_heads * head_dim * dtype_bytes.
+    # Curated because it is the one architectural fact that decides whether a profile can serve a
+    # single max-length request, and getting it wrong is invisible until a paid pod crash-loops
+    # (qwen3-32b, 2026-08-10). Optional: a GGUF entry has no HF config to read it from.
+    kv_bytes_per_token: int | None = None
     # capability flags
     chat: bool = True
     completion: bool = False
