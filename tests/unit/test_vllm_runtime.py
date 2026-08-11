@@ -105,3 +105,30 @@ async def test_model_ready_unreachable_is_not_ok():
     rt = VLLMRuntime(transport=httpx.MockTransport(boom))
     res = await rt.model_ready("http://pod:8000", "x")
     assert res.ok is False and "unreachable" in res.detail
+
+
+def test_multi_gpu_disables_nccl_p2p():
+    """NCCL peer-to-peer hangs on cloud pods whose GPUs sit behind a PCIe switch with no NVLink,
+    which is the normal RunPod multi-GPU shape. Measured on a 2x A40 pod: a plain all-reduce never
+    returns; with this set it completes in 0.385s at 13 GB/s. Without it a TP>1 deploy sits in
+    starting_server until the stage budget trips, with no log to say why."""
+    profile = QWEN3_06B_PROFILE.model_copy(update={"tensor_parallel": 2})
+    req = VLLMRuntime().build_instance_request(QWEN3_06B_SPEC, profile, _GPU, name="n")
+    assert req.env["NCCL_P2P_DISABLE"] == "1"
+
+
+def test_single_gpu_leaves_nccl_alone():
+    """One GPU is one process with no collectives, so there is nothing to disable and no reason to
+    carry a setting that would mislead anyone reading the pod env."""
+    req = VLLMRuntime().build_instance_request(QWEN3_06B_SPEC, QWEN3_06B_PROFILE, _GPU, name="n")
+    assert "NCCL_P2P_DISABLE" not in req.env
+
+
+def test_a_profile_can_override_the_nccl_default():
+    """On a real NVLink machine P2P is a large win, so the default must be overridable rather than
+    hard-coded."""
+    profile = QWEN3_06B_PROFILE.model_copy(
+        update={"tensor_parallel": 2, "env": {"NCCL_P2P_DISABLE": "0"}}
+    )
+    req = VLLMRuntime().build_instance_request(QWEN3_06B_SPEC, profile, _GPU, name="n")
+    assert req.env["NCCL_P2P_DISABLE"] == "0"
